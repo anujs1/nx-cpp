@@ -1,0 +1,30 @@
+from setuptools import setup
+from pybind11.setup_helpers import Pybind11Extension, build_ext
+
+ext_modules = [
+    Pybind11Extension(
+        "nx_cpp._nx_cpp",
+        ["nx_cpp/_core.cpp"],
+        cxx_std=17,
+    ),
+]
+
+setup(
+    name="nx-cpp",
+    version="0.0.1",
+    description="Minimal C++ backend for NetworkX (demo)",
+    packages=["nx_cpp"],
+    ext_modules=ext_modules,
+    cmdclass={"build_ext": build_ext},
+    python_requires=">=3.9",
+    install_requires=[
+        "networkx>=3.2",
+        "pybind11>=2.11",
+        "numpy>=1.21",
+        "scipy>=1.9",
+    ],
+    entry_points={
+        "networkx.backends": ["cpp = nx_cpp.backend:backend"],
+        "networkx.backend_info": ["cpp = nx_cpp.backend:get_info"],
+    },
+)

@@ -1,0 +1,6 @@
+.DS_Store
+
+nx_cpp.egg-info/*
+
+**/*.so
+**/*.pyc
