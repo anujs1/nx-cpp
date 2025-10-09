@@ -24,6 +24,6 @@ if __name__ == "__main__":
     print("Random seed:", random_int)
     test_random_graph_benchmark(1000, 0.01)
     test_random_graph_benchmark(2000, 0.005)
-    test_random_graph_benchmark(2000, 0.1)
-    test_random_graph_benchmark(20000, 0.01)
+    test_random_graph_benchmark(10000, 0.1)
+    test_random_graph_benchmark(20000, 0.05)
     print("All random graph tests passed")
