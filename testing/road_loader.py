@@ -1,5 +1,6 @@
 import networkx as nx
 
+
 def load_dimacs_graph(path: str, directed=True):
     """
     Load a DIMACS-format road network file.
@@ -12,6 +13,6 @@ def load_dimacs_graph(path: str, directed=True):
                 continue
             parts = line.strip().split()
             if parts[0] == "a" and len(parts) >= 4:
-                u, v, w = int(parts[1])-1, int(parts[2])-1, float(parts[3])
+                u, v, w = int(parts[1]) - 1, int(parts[2]) - 1, float(parts[3])
                 G.add_edge(u, v, weight=w)
     return G

@@ -1,9 +1,9 @@
 #include <cmath>
+#include <numeric>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <utility>
 #include <vector>
-#include <numeric>
 
 namespace py = pybind11;
 
@@ -38,7 +38,8 @@ struct Graph {
   }
 };
 
-std::vector<double> pagerank(const Graph &G, double alpha, int max_iter, double tol) {
+std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
+                             double tol) {
   const int n = G.n;
   if (n == 0)
     return {};
@@ -70,13 +71,14 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter, double 
     double diff = 0.0;
     for (int i = 0; i < n; ++i)
       diff += std::abs(next[i] - pr[i]);
-    
+
     // normalizing pr to ensure sum stays at 1
     double s = std::accumulate(next.begin(), next.end(), 0.0);
     if (s > 0)
-      for (double &x : next) x /= s;
+      for (double &x : next)
+        x /= s;
     pr.swap(next);
-    
+
     // adding a normalization to diff to avoid exiting too early
     if (diff / n < tol)
       break;
@@ -87,13 +89,14 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter, double 
 PYBIND11_MODULE(_nx_cpp, m) {
   auto graph_cls = py::class_<Graph>(m, "Graph");
   graph_cls
-      .def(py::init<int, const std::vector<std::pair<int, int>> &, bool>(), py::arg("num_nodes"), py::arg("edges"),
-           py::arg("directed") = false)
+      .def(py::init<int, const std::vector<std::pair<int, int>> &, bool>(),
+           py::arg("num_nodes"), py::arg("edges"), py::arg("directed") = false)
       .def("is_directed", &Graph::is_directed)
       .def("is_multigraph", &Graph::is_multigraph)
       .def("edges", &Graph::edges);
   graph_cls.attr("__networkx_backend__") = "cpp";
 
-  m.def("pagerank", &pagerank, py::arg("graph"), py::arg("alpha") = 0.85, py::arg("max_iter") = 100,
-        py::arg("tol") = 1e-6, "Minimal unweighted PageRank implementation.");
+  m.def("pagerank", &pagerank, py::arg("graph"), py::arg("alpha") = 0.85,
+        py::arg("max_iter") = 100, py::arg("tol") = 1e-6,
+        "Minimal unweighted PageRank implementation.");
 }

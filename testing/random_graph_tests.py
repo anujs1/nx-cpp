@@ -2,6 +2,7 @@ import networkx as nx
 import time
 import random
 
+
 def test_random_graph_benchmark(n, p, tol=1e-6):
     G = nx.gnp_random_graph(n, p, directed=True, seed=random_int)
 
@@ -18,6 +19,7 @@ def test_random_graph_benchmark(n, p, tol=1e-6):
         assert abs(pr_py[node] - pr_cpp[node]) < tol, f"Mismatch on node {node}, {pr_py[node]} vs {pr_cpp[node]}"
 
     print(f"[n={n}, p={p}] Python={t_py:.4f}s  C++={t_cpp:.4f}s  Speedup={t_py/t_cpp:.2f}x")
+
 
 if __name__ == "__main__":
     random_int = random.randint(1, 10000)
