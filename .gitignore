@@ -1,6 +1,8 @@
 .DS_Store
 /.vscode
 
+.venv/*
+
 nx_cpp.egg-info/*
 
 **/*.so
