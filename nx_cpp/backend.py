@@ -1,8 +1,8 @@
 import sys
 import time
 from collections import defaultdict
-
 import networkx as nx
+import weakref
 
 # pybind11 module
 from ._nx_cpp import (
@@ -48,6 +48,13 @@ class NxCppGraph:
         nodes = self._nodes
         return [(nodes[u], nodes[v]) for (u, v) in idx_edges]
 
+def _component_sets_from_ids(nodes, component_ids):
+    groups = defaultdict(set)
+    for idx, comp_id in enumerate(component_ids):
+        groups[int(comp_id)].add(nodes[idx])
+    sorted_components = sorted(groups.values(), key=len, reverse=True)
+    for component in sorted_components:
+        yield component
 
 def _component_sets_from_ids(nodes, component_ids):
     groups = defaultdict(set)
@@ -58,13 +65,43 @@ def _component_sets_from_ids(nodes, component_ids):
         yield component
 
 
-def convert_from_nx(G, weight='weight', **kwargs):
+def _graph_signature(G, weight='weight'):
+    """Create a lightweight signature for cache validation.
+    NOTE: This does not detect subtle mutations that keep counts constant.
+    Extend if stricter invalidation is needed.
+    """
+    try:
+        return (
+            id(G),  # object identity; helps if multiple graphs
+            G.is_directed(),
+            G.is_multigraph(),
+            G.number_of_nodes(),
+            G.number_of_edges(),
+            weight,
+        )
+    except Exception:
+        return None
+
+def convert_from_nx(G, weight='weight', use_cache=True, **kwargs):
     """
     Convert a NetworkX Graph -> NxCppGraph.
-    - Nodes are relabeled to 0..n-1 for C++
+    Caching:
+      Stores (signature, NxCppGraph) in G.graph['_nx_cpp_cache'].
+      If signature matches, reuses the existing converted graph.
+    - Nodes relabeled to 0..n-1 for C++
     - Parallel edges collapsed (no multigraph support)
-    - Supports weighted graphs via weight parameter
+    - Weighted edges supported via 'weight'.
+    Parameters
+    ----------
+    G : networkx.Graph/DiGraph/Multigraph
+    weight : str, edge attribute name
+    use_cache : bool, set False to force rebuild
     """
+    if use_cache:
+        cache_entry = G.graph.get('_nx_cpp_cache')
+        sig = _graph_signature(G, weight)
+        if cache_entry and cache_entry.get('sig') == sig:
+            return cache_entry['obj']
     t_start = time.time()
     nodes = list(G.nodes())
     t_nodes = time.time()
@@ -108,7 +145,18 @@ def convert_from_nx(G, weight='weight', **kwargs):
     
     print(f"  [Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
     
-    return NxCppGraph(cpp_graph, nodes)
+    nx_cpp_obj = NxCppGraph(cpp_graph, nodes)
+    if use_cache:
+        G.graph['_nx_cpp_cache'] = {'sig': sig, 'obj': nx_cpp_obj}
+    return nx_cpp_obj
+
+
+def clear_nx_cpp_cache(G):
+    """Remove any stored conversion cache from the NetworkX graph."""
+    if '_nx_cpp_cache' in G.graph:
+        del G.graph['_nx_cpp_cache']
+        return True
+    return False
 
 
 def convert_to_nx(obj, **kwargs):
