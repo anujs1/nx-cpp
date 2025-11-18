@@ -1,4 +1,6 @@
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -77,24 +79,24 @@ struct DisjointSet {
   }
 
   int find(int x) {
-    if (parent[x] != x)
-      parent[x] = find(parent[x]);
-    return parent[x];
+    while (parent[x] != x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
   }
 
-  void unite(int x, int y) {
+  bool unite(int x, int y) {
     int rx = find(x);
     int ry = find(y);
     if (rx == ry)
-      return;
-    if (rank[rx] < rank[ry]) {
-      parent[rx] = ry;
-    } else if (rank[rx] > rank[ry]) {
-      parent[ry] = rx;
-    } else {
-      parent[ry] = rx;
+      return false;
+    if (rank[rx] < rank[ry])
+      std::swap(rx, ry);
+    parent[ry] = rx;
+    if (rank[rx] == rank[ry])
       rank[rx]++;
-    }
+    return true;
   }
 };
 
@@ -109,6 +111,121 @@ struct WeightedEdge {
   int v;
   double w;
 };
+
+void radix_sort_edges_by_weight(std::vector<WeightedEdge> &edges,
+                                std::vector<int64_t> &keys) {
+  const size_t m = edges.size();
+  if (m == 0)
+    return;
+  std::vector<WeightedEdge> scratch_edges(m);
+  std::vector<int64_t> scratch_keys(m);
+  constexpr int BITS = 8;
+  constexpr size_t BUCKETS = 1ull << BITS;
+  constexpr uint64_t MASK = BUCKETS - 1;
+  for (int shift = 0; shift < 64; shift += BITS) {
+    std::array<size_t, BUCKETS> counts{};
+    for (size_t i = 0; i < m; ++i) {
+      uint64_t key = static_cast<uint64_t>(keys[i]) ^ (1ull << 63);
+      const size_t bucket = (key >> shift) & MASK;
+      counts[bucket]++;
+    }
+    size_t total = 0;
+    for (size_t b = 0; b < BUCKETS; ++b) {
+      size_t c = counts[b];
+      counts[b] = total;
+      total += c;
+    }
+    for (size_t i = 0; i < m; ++i) {
+      uint64_t key = static_cast<uint64_t>(keys[i]) ^ (1ull << 63);
+      const size_t bucket = (key >> shift) & MASK;
+      const size_t pos = counts[bucket]++;
+      scratch_edges[pos] = edges[i];
+      scratch_keys[pos] = keys[i];
+    }
+    edges.swap(scratch_edges);
+    keys.swap(scratch_keys);
+  }
+}
+
+void sort_weighted_edges(std::vector<WeightedEdge> &edges) {
+  constexpr double EPS = 1e-9;
+  constexpr size_t RADIX_THRESHOLD = 256;
+  std::vector<int64_t> keys;
+  keys.reserve(edges.size());
+  bool integral = edges.size() >= RADIX_THRESHOLD;
+  if (integral) {
+    for (const auto &e : edges) {
+      double rounded = std::round(e.w);
+      if (std::abs(e.w - rounded) > EPS) {
+        integral = false;
+        break;
+      }
+      if (rounded < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+          rounded > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+        integral = false;
+        break;
+      }
+      keys.push_back(static_cast<int64_t>(rounded));
+    }
+  }
+  if (integral && keys.size() == edges.size()) {
+    radix_sort_edges_by_weight(edges, keys);
+    return;
+  }
+  std::sort(edges.begin(), edges.end(),
+            [](const WeightedEdge &a, const WeightedEdge &b) {
+              if (a.w != b.w)
+                return a.w < b.w;
+              if (a.u != b.u)
+                return a.u < b.u;
+              return a.v < b.v;
+            });
+}
+
+void boruvka_seed_components(const Graph &G,
+                             const std::vector<WeightedEdge> &edges,
+                             DisjointSet &dsu,
+                             std::vector<std::tuple<int, int, double>> &tree,
+                             int rounds) {
+  if (rounds <= 0)
+    return;
+  const int n = G.n;
+  std::vector<int> best_edge(n, -1);
+  std::vector<double> best_weight(n, std::numeric_limits<double>::infinity());
+  for (int round = 0; round < rounds; ++round) {
+    std::fill(best_edge.begin(), best_edge.end(), -1);
+    std::fill(best_weight.begin(), best_weight.end(),
+              std::numeric_limits<double>::infinity());
+    for (size_t idx = 0; idx < edges.size(); ++idx) {
+      const auto &edge = edges[idx];
+      int ru = dsu.find(edge.u);
+      int rv = dsu.find(edge.v);
+      if (ru == rv)
+        continue;
+      if (edge.w < best_weight[ru]) {
+        best_weight[ru] = edge.w;
+        best_edge[ru] = static_cast<int>(idx);
+      }
+      if (edge.w < best_weight[rv]) {
+        best_weight[rv] = edge.w;
+        best_edge[rv] = static_cast<int>(idx);
+      }
+    }
+    bool any = false;
+    for (int u = 0; u < n; ++u) {
+      const int idx = best_edge[u];
+      if (idx == -1)
+        continue;
+      const auto &edge = edges[idx];
+      if (dsu.unite(edge.u, edge.v)) {
+        tree.emplace_back(edge.u, edge.v, edge.w);
+        any = true;
+      }
+    }
+    if (!any)
+      break;
+  }
+}
 
 std::vector<WeightedEdge> collect_undirected_edges(const Graph &G) {
   require_undirected(G, "collect_undirected_edges");
@@ -156,6 +273,90 @@ GraphView build_graph_view(const Graph &G) {
     }
   }
   return view;
+}
+
+std::vector<std::vector<int>> build_in_adj(const Graph &G) {
+  std::vector<std::vector<int>> in_adj(G.n);
+  for (int u = 0; u < G.n; ++u) {
+    for (int v : G.out_adj[u]) {
+      in_adj[v].push_back(u);
+    }
+  }
+  return in_adj;
+}
+
+std::vector<uint64_t>
+weisfeiler_lehman_signatures(const Graph &G,
+                             const std::vector<std::vector<int>> &in_adj,
+                             int max_iter) {
+  const int n = G.n;
+  std::vector<uint64_t> colors(n, 0);
+  if (n == 0)
+    return colors;
+
+  std::vector<uint64_t> next(n, 0);
+  for (int u = 0; u < n; ++u) {
+    uint64_t base = static_cast<uint64_t>(G.out_adj[u].size());
+    base = (base << 32) ^ static_cast<uint64_t>(in_adj[u].size());
+    colors[u] = base;
+  }
+  max_iter = std::max(1, max_iter);
+  const uint64_t OUT_MASK = 0x9e3779b97f4a7c15ull;
+  const uint64_t IN_MASK = 0xc6a4a7935bd1e995ull;
+  for (int iter = 0; iter < max_iter; ++iter) {
+    for (int u = 0; u < n; ++u) {
+      std::vector<uint64_t> signature;
+      signature.reserve(G.out_adj[u].size() + in_adj[u].size());
+      for (int v : G.out_adj[u]) {
+        signature.push_back(colors[v] ^ OUT_MASK);
+      }
+      for (int v : in_adj[u]) {
+        signature.push_back(colors[v] ^ IN_MASK);
+      }
+      std::sort(signature.begin(), signature.end());
+      uint64_t h = colors[u] ^ 0x51ed270b0b146f7bull;
+      for (uint64_t val : signature) {
+        h ^= val + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      }
+      next[u] = h;
+    }
+    if (next == colors)
+      break;
+    colors.swap(next);
+  }
+  return colors;
+}
+
+struct GraphBitsets {
+  int words;
+  std::vector<uint64_t> out_bits;
+  std::vector<uint64_t> in_bits;
+};
+
+GraphBitsets build_graph_bitsets(const Graph &G) {
+  GraphBitsets bitsets;
+  bitsets.words = (G.n == 0) ? 1 : ((G.n + 63) / 64);
+  bitsets.out_bits.assign(static_cast<size_t>(G.n) * bitsets.words, 0);
+  bitsets.in_bits.assign(static_cast<size_t>(G.n) * bitsets.words, 0);
+  for (int u = 0; u < G.n; ++u) {
+    for (int v : G.out_adj[u]) {
+      size_t out_idx =
+          static_cast<size_t>(u) * bitsets.words + static_cast<size_t>(v >> 6);
+      bitsets.out_bits[out_idx] |= (1ull << (v & 63));
+      size_t in_idx =
+          static_cast<size_t>(v) * bitsets.words + static_cast<size_t>(u >> 6);
+      bitsets.in_bits[in_idx] |= (1ull << (u & 63));
+    }
+  }
+  return bitsets;
+}
+
+inline bool bitset_test(const std::vector<uint64_t> &data, int words, int u,
+                        int v) {
+  size_t idx =
+      static_cast<size_t>(u) * words + static_cast<size_t>(v >> 6);
+  const uint64_t mask = 1ull << (v & 63);
+  return (data[idx] & mask) != 0;
 }
 
 std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
@@ -290,25 +491,57 @@ std::vector<int> connected_components_union_find(const Graph &G) {
 std::vector<int> connected_components_bfs(const Graph &G) {
   require_undirected(G, "connected_components_bfs");
   const int n = G.n;
-  std::vector<int> components(n, -1);
-  int comp_id = 0;
-  std::queue<int> q;
-  for (int i = 0; i < n; ++i) {
-    if (components[i] != -1)
-      continue;
-    components[i] = comp_id;
-    q.push(i);
-    while (!q.empty()) {
-      int u = q.front();
-      q.pop();
+  if (n == 0)
+    return {};
+
+  std::vector<int> labels(n);
+  std::iota(labels.begin(), labels.end(), 0);
+  std::vector<int> buffer = labels;
+
+  bool changed = true;
+  int iter = 0;
+  const int max_iters = std::max(4, static_cast<int>(std::ceil(std::log2(n + 1))) * 4);
+  while (changed && iter < max_iters) {
+    changed = false;
+    ++iter;
+    for (int u = 0; u < n; ++u) {
+      int best = labels[u];
       for (int v : G.out_adj[u]) {
-        if (components[v] == -1) {
-          components[v] = comp_id;
-          q.push(v);
-        }
+        if (labels[v] < best)
+          best = labels[v];
+      }
+      buffer[u] = best;
+    }
+    for (int u = 0; u < n; ++u) {
+      if (buffer[u] != labels[u]) {
+        labels[u] = buffer[u];
+        changed = true;
       }
     }
-    comp_id++;
+    for (int u = 0; u < n; ++u) {
+      while (labels[u] != labels[labels[u]]) {
+        labels[u] = labels[labels[u]];
+      }
+    }
+  }
+  for (int u = 0; u < n; ++u) {
+    while (labels[u] != labels[labels[u]]) {
+      labels[u] = labels[labels[u]];
+    }
+  }
+
+  std::unordered_map<int, int> comp_map;
+  std::vector<int> components(n, -1);
+  int next_id = 0;
+  for (int i = 0; i < n; ++i) {
+    int root = labels[i];
+    auto it = comp_map.find(root);
+    if (it == comp_map.end()) {
+      comp_map[root] = next_id;
+      it = comp_map.find(root);
+      next_id++;
+    }
+    components[i] = it->second;
   }
   return components;
 }
@@ -316,25 +549,106 @@ std::vector<int> connected_components_bfs(const Graph &G) {
 std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
   auto edges = collect_undirected_edges(G);
-  std::sort(edges.begin(), edges.end(),
-            [](const WeightedEdge &a, const WeightedEdge &b) {
-              if (a.w != b.w)
-                return a.w < b.w;
-              if (a.u != b.u)
-                return a.u < b.u;
-              return a.v < b.v;
-            });
   DisjointSet dsu(G.n);
   std::vector<std::tuple<int, int, double>> tree;
   tree.reserve(G.n ? G.n - 1 : 0);
+  const int rounds = (G.n >= 4096) ? 3 : (G.n >= 512 ? 2 : (G.n >= 128 ? 1 : 0));
+  if (rounds > 0)
+    boruvka_seed_components(G, edges, dsu, tree, rounds);
+  sort_weighted_edges(edges);
   for (const auto &e : edges) {
-    if (dsu.find(e.u) != dsu.find(e.v)) {
-      dsu.unite(e.u, e.v);
+    if (dsu.unite(e.u, e.v)) {
       tree.emplace_back(e.u, e.v, e.w);
+      if (static_cast<int>(tree.size()) == G.n - 1)
+        break;
     }
   }
   return tree;
 }
+
+class DaryHeap {
+public:
+  explicit DaryHeap(int n, int degree = 4)
+      : d(std::max(2, degree)), position(n, -1),
+        keys(n, std::numeric_limits<double>::infinity()) {}
+
+  bool empty() const { return heap.empty(); }
+
+  double key_of(int node) const { return keys[node]; }
+
+  void decrease_key(int node, double value) {
+    if (position[node] == -1) {
+      heap.push_back(node);
+      position[node] = static_cast<int>(heap.size()) - 1;
+      keys[node] = value;
+      bubble_up(position[node]);
+    } else if (value < keys[node]) {
+      keys[node] = value;
+      bubble_up(position[node]);
+    }
+  }
+
+  std::pair<int, double> pop_min() {
+    int node = heap.front();
+    double key = keys[node];
+    int last = heap.back();
+    heap.pop_back();
+    if (!heap.empty()) {
+      heap[0] = last;
+      position[last] = 0;
+      sift_down(0);
+    }
+    position[node] = -1;
+    return {node, key};
+  }
+
+  void clear() {
+    heap.clear();
+    std::fill(position.begin(), position.end(), -1);
+    std::fill(keys.begin(), keys.end(),
+              std::numeric_limits<double>::infinity());
+  }
+
+private:
+  int d;
+  std::vector<int> heap;
+  std::vector<int> position;
+  std::vector<double> keys;
+
+  void bubble_up(int idx) {
+    while (idx > 0) {
+      int parent = (idx - 1) / d;
+      if (keys[heap[idx]] < keys[heap[parent]]) {
+        std::swap(heap[idx], heap[parent]);
+        position[heap[idx]] = idx;
+        position[heap[parent]] = parent;
+        idx = parent;
+      } else {
+        break;
+      }
+    }
+  }
+
+  void sift_down(int idx) {
+    const int size = static_cast<int>(heap.size());
+    while (true) {
+      int smallest = idx;
+      for (int i = 1; i <= d; ++i) {
+        int child = d * idx + i;
+        if (child < size &&
+            keys[heap[child]] < keys[heap[smallest]]) {
+          smallest = child;
+        }
+      }
+      if (smallest == idx)
+        break;
+      std::swap(heap[idx], heap[smallest]);
+      position[heap[idx]] = idx;
+      position[heap[smallest]] = smallest;
+      idx = smallest;
+    }
+  }
+};
 
 std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
@@ -343,29 +657,33 @@ std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
   if (n == 0)
     return tree;
   std::vector<bool> in_tree(n, false);
-  using PQItem = std::tuple<double, int, int>; // weight, parent, node
-  std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
+  std::vector<int> parent(n, -1);
+  DaryHeap heap(n, 8);
   for (int start = 0; start < n; ++start) {
     if (in_tree[start])
       continue;
-    pq.emplace(0.0, -1, start);
-    while (!pq.empty()) {
-      auto [weight, parent, node] = pq.top();
-      pq.pop();
+    heap.decrease_key(start, 0.0);
+    parent[start] = -1;
+    while (!heap.empty()) {
+      auto [node, weight] = heap.pop_min();
       if (in_tree[node])
         continue;
       in_tree[node] = true;
-      if (parent != -1) {
-        tree.emplace_back(parent, node, weight);
+      if (parent[node] != -1) {
+        tree.emplace_back(parent[node], node, weight);
       }
       for (size_t i = 0; i < G.out_adj[node].size(); ++i) {
         int nb = G.out_adj[node][i];
         double w = G.weights[node][i];
-        if (!in_tree[nb]) {
-          pq.emplace(w, node, nb);
+        if (in_tree[nb])
+          continue;
+        if (w < heap.key_of(nb)) {
+          parent[nb] = node;
+          heap.decrease_key(nb, w);
         }
       }
     }
+    heap.clear();
   }
   return tree;
 }
@@ -379,62 +697,78 @@ std::vector<std::tuple<int, int, double>> minimum_spanning_tree(
   throw std::invalid_argument("Unknown MST algorithm: " + algorithm);
 }
 
-bool iso_backtrack(int idx, const std::vector<int> &order,
-                   std::vector<int> &mapping, std::vector<bool> &used,
-                   const GraphView &A, const GraphView &B) {
-  const int n = static_cast<int>(order.size());
-  if (idx == n)
-    return true;
-  int u = order[idx];
-  for (int v = 0; v < n; ++v) {
-    if (used[v])
+constexpr double kWeightTolerance = 1e-9;
+
+struct IsoContext {
+  const GraphView &A;
+  const GraphView &B;
+  const GraphBitsets &bits_a;
+  const GraphBitsets &bits_b;
+  const std::vector<int> &color_a;
+  const std::vector<std::vector<int>> &candidates;
+  const std::vector<int> &order;
+};
+
+bool adjacency_compatible(int u, int v, int depth, const IsoContext &ctx,
+                          const std::vector<int> &mapping) {
+  for (int i = 0; i < depth; ++i) {
+    int other = ctx.order[i];
+    int mapped = mapping[other];
+    if (mapped == -1)
       continue;
-    if (A.out_degree[u] != B.out_degree[v])
-      continue;
-    if (A.in_degree[u] != B.in_degree[v])
-      continue;
-    bool ok = true;
-    for (int i = 0; i < n; ++i) {
-      int mapped = mapping[i];
-      if (mapped == -1)
-        continue;
-      bool out_uw = A.out_adj_sets[u].count(i) > 0;
-      bool out_vw = B.out_adj_sets[v].count(mapped) > 0;
-      if (out_uw != out_vw) {
-        ok = false;
-        break;
-      }
-      if (out_uw) {
-        double w1 = A.out_weights[u].at(i);
-        double w2 = B.out_weights[v].at(mapped);
-        if (std::abs(w1 - w2) > 1e-9) {
-          ok = false;
-          break;
-        }
-      }
-      bool in_uw = A.in_adj_sets[u].count(i) > 0;
-      bool in_vw = B.in_adj_sets[v].count(mapped) > 0;
-      if (in_uw != in_vw) {
-        ok = false;
-        break;
-      }
-      if (in_uw) {
-        double w1 = A.in_weights[u].at(i);
-        double w2 = B.in_weights[v].at(mapped);
-        if (std::abs(w1 - w2) > 1e-9) {
-          ok = false;
-          break;
-        }
-      }
+    bool out_a =
+        bitset_test(ctx.bits_a.out_bits, ctx.bits_a.words, u, other);
+    bool out_b =
+        bitset_test(ctx.bits_b.out_bits, ctx.bits_b.words, v, mapped);
+    if (out_a != out_b)
+      return false;
+    if (out_a) {
+      double w1 = ctx.A.out_weights[u].at(other);
+      double w2 = ctx.B.out_weights[v].at(mapped);
+      if (std::abs(w1 - w2) > kWeightTolerance)
+        return false;
     }
-    if (!ok)
+    bool in_a =
+        bitset_test(ctx.bits_a.in_bits, ctx.bits_a.words, u, other);
+    bool in_b =
+        bitset_test(ctx.bits_b.in_bits, ctx.bits_b.words, v, mapped);
+    if (in_a != in_b)
+      return false;
+    if (in_a) {
+      double w1 = ctx.A.in_weights[u].at(other);
+      double w2 = ctx.B.in_weights[v].at(mapped);
+      if (std::abs(w1 - w2) > kWeightTolerance)
+        return false;
+    }
+  }
+  return true;
+}
+
+bool iso_backtrack(int depth, const IsoContext &ctx,
+                   std::vector<int> &mapping,
+                   std::vector<int> &reverse_map) {
+  if (depth == static_cast<int>(ctx.order.size()))
+    return true;
+  int u = ctx.order[depth];
+  int color = ctx.color_a[u];
+  const auto &bucket = ctx.candidates[color];
+  if (bucket.empty())
+    return false;
+  for (int v : bucket) {
+    if (reverse_map[v] != -1)
+      continue;
+    if (ctx.A.out_degree[u] != ctx.B.out_degree[v])
+      continue;
+    if (ctx.A.in_degree[u] != ctx.B.in_degree[v])
+      continue;
+    if (!adjacency_compatible(u, v, depth, ctx, mapping))
       continue;
     mapping[u] = v;
-    used[v] = true;
-    if (iso_backtrack(idx + 1, order, mapping, used, A, B))
+    reverse_map[v] = u;
+    if (iso_backtrack(depth + 1, ctx, mapping, reverse_map))
       return true;
     mapping[u] = -1;
-    used[v] = false;
+    reverse_map[v] = -1;
   }
   return false;
 }
@@ -461,18 +795,78 @@ bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   if (deg_in1 != deg_in2)
     return false;
   const int n = G1.n;
+  auto in_adj1 = build_in_adj(G1);
+  auto in_adj2 = build_in_adj(G2);
+  const int wl_iters =
+      std::max(2, static_cast<int>(std::ceil(std::log2(std::max(2, n)))));
+  auto wl1 = weisfeiler_lehman_signatures(G1, in_adj1, wl_iters);
+  auto wl2 = weisfeiler_lehman_signatures(G2, in_adj2, wl_iters);
+  auto sorted1 = wl1;
+  auto sorted2 = wl2;
+  std::sort(sorted1.begin(), sorted1.end());
+  std::sort(sorted2.begin(), sorted2.end());
+  if (sorted1 != sorted2)
+    return false;
+  std::unordered_map<uint64_t, int> color_map;
+  int next_color = 0;
+  std::vector<int> colors1(n);
+  std::vector<int> colors2(n);
+  for (int i = 0; i < n; ++i) {
+    auto it = color_map.find(wl1[i]);
+    if (it == color_map.end()) {
+      color_map[wl1[i]] = next_color;
+      colors1[i] = next_color;
+      next_color++;
+    } else {
+      colors1[i] = it->second;
+    }
+  }
+  for (int i = 0; i < n; ++i) {
+    auto it = color_map.find(wl2[i]);
+    if (it == color_map.end()) {
+      color_map[wl2[i]] = next_color;
+      colors2[i] = next_color;
+      next_color++;
+    } else {
+      colors2[i] = it->second;
+    }
+  }
+  std::vector<int> color_counts(next_color, 0);
+  for (int c : colors1)
+    color_counts[c]++;
+  std::vector<std::vector<int>> candidates(next_color);
+  for (int v = 0; v < n; ++v) {
+    candidates[colors2[v]].push_back(v);
+  }
+  for (int color = 0; color < next_color; ++color) {
+    if (color_counts[color] != static_cast<int>(candidates[color].size()))
+      return false;
+    std::sort(candidates[color].begin(), candidates[color].end(),
+              [&](int lhs, int rhs) {
+                if (view2.out_degree[lhs] != view2.out_degree[rhs])
+                  return view2.out_degree[lhs] > view2.out_degree[rhs];
+                if (view2.in_degree[lhs] != view2.in_degree[rhs])
+                  return view2.in_degree[lhs] > view2.in_degree[rhs];
+                return lhs < rhs;
+              });
+  }
   std::vector<int> order(n);
   std::iota(order.begin(), order.end(), 0);
   std::sort(order.begin(), order.end(), [&](int a, int b) {
-    if (view1.out_degree[a] != view1.out_degree[b])
-      return view1.out_degree[a] > view1.out_degree[b];
-    if (view1.in_degree[a] != view1.in_degree[b])
-      return view1.in_degree[a] > view1.in_degree[b];
+    if (color_counts[colors1[a]] != color_counts[colors1[b]])
+      return color_counts[colors1[a]] < color_counts[colors1[b]];
+    const int deg_a = view1.out_degree[a] + view1.in_degree[a];
+    const int deg_b = view1.out_degree[b] + view1.in_degree[b];
+    if (deg_a != deg_b)
+      return deg_a > deg_b;
     return a < b;
   });
+  GraphBitsets bits1 = build_graph_bitsets(G1);
+  GraphBitsets bits2 = build_graph_bitsets(G2);
+  IsoContext ctx{view1, view2, bits1, bits2, colors1, candidates, order};
   std::vector<int> mapping(n, -1);
-  std::vector<bool> used(n, false);
-  return iso_backtrack(0, order, mapping, used, view1, view2);
+  std::vector<int> reverse_map(n, -1);
+  return iso_backtrack(0, ctx, mapping, reverse_map);
 }
 
 // Dijkstra's algorithm for shortest paths
