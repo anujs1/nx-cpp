@@ -25,6 +25,11 @@ class NxCppGraph:
     def __init__(self, cpp_graph: CppGraph, nodes):
         self._G = cpp_graph
         self._nodes = list(nodes)
+        # Fast label->index map for non-integer / string labels
+        try:
+            self._index = {n: i for i, n in enumerate(self._nodes)}
+        except Exception:
+            self._index = {}
 
     def is_directed(self) -> bool:
         return self._G.is_directed()
@@ -152,9 +157,8 @@ def bfs_edges(G, source, reverse=False, depth_limit=None, sort_neighbors=None):
     """
     if isinstance(G, NxCppGraph):
         nodes = G._nodes
-        try:
-            source_idx = nodes.index(source)
-        except ValueError:
+        source_idx = G._index.get(source, -1)
+        if source_idx == -1:
             raise nx.NodeNotFound(f"Source node {source} not in graph")
         
         parent = _cpp_bfs_edges(graph=G._G, source=source_idx)
@@ -187,9 +191,8 @@ def dfs_edges(G, source, depth_limit=None):
     """
     if isinstance(G, NxCppGraph):
         nodes = G._nodes
-        try:
-            source_idx = nodes.index(source)
-        except ValueError:
+        source_idx = G._index.get(source, -1)
+        if source_idx == -1:
             raise nx.NodeNotFound(f"Source node {source} not in graph")
         
         parent = _cpp_dfs_edges(graph=G._G, source=source_idx)
@@ -221,9 +224,8 @@ def shortest_path(G, source, target=None, weight='weight', method='dijkstra'):
     """
     if isinstance(G, NxCppGraph):
         nodes = G._nodes
-        try:
-            source_idx = nodes.index(source)
-        except ValueError:
+        source_idx = G._index.get(source, -1)
+        if source_idx == -1:
             raise nx.NodeNotFound(f"Source node {source} not in graph")
         
         # Choose algorithm
@@ -250,9 +252,8 @@ def shortest_path(G, source, target=None, weight='weight', method='dijkstra'):
             return list(reversed(path))
         
         if target is not None:
-            try:
-                target_idx = nodes.index(target)
-            except ValueError:
+            target_idx = G._index.get(target, -1)
+            if target_idx == -1:
                 raise nx.NodeNotFound(f"Target node {target} not in graph")
             result = get_path(target_idx)
         else:
