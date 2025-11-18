@@ -7,3 +7,5 @@ nx_cpp.egg-info/*
 
 **/*.so
 **/*.pyc
+
+build/
