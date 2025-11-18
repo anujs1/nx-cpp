@@ -1,6 +1,8 @@
 import sys
-import networkx as nx
 import time
+from collections import defaultdict
+
+import networkx as nx
 
 # pybind11 module
 from ._nx_cpp import (
@@ -11,6 +13,10 @@ from ._nx_cpp import (
     dijkstra as _cpp_dijkstra,
     bellman_ford as _cpp_bellman_ford,
     betweenness_centrality as _cpp_betweenness_centrality,
+    connected_components_union_find as _cpp_connected_components_union_find,
+    connected_components_bfs as _cpp_connected_components_bfs,
+    minimum_spanning_tree as _cpp_minimum_spanning_tree,
+    graphs_are_isomorphic as _cpp_graphs_are_isomorphic,
 )
 
 
@@ -41,6 +47,15 @@ class NxCppGraph:
         idx_edges = self._G.edges()
         nodes = self._nodes
         return [(nodes[u], nodes[v]) for (u, v) in idx_edges]
+
+
+def _component_sets_from_ids(nodes, component_ids):
+    groups = defaultdict(set)
+    for idx, comp_id in enumerate(component_ids):
+        groups[int(comp_id)].add(nodes[idx])
+    sorted_components = sorted(groups.values(), key=len, reverse=True)
+    for component in sorted_components:
+        yield component
 
 
 def convert_from_nx(G, weight='weight', **kwargs):
@@ -107,13 +122,35 @@ def convert_to_nx(obj, **kwargs):
 
 
 def can_run(name, args, kwargs):
-    """We implement pagerank, bfs_edges, dfs_edges, shortest_path, and betweenness_centrality functions."""
-    return name in ("pagerank", "bfs_edges", "dfs_edges", "shortest_path", "dijkstra_path", "bellman_ford_path", "betweenness_centrality")
+    """We implement pagerank, traversals, shortest paths, connectivity, MST, isomorphism, and betweenness_centrality."""
+    return name in (
+        "pagerank",
+        "bfs_edges",
+        "dfs_edges",
+        "shortest_path",
+        "dijkstra_path",
+        "bellman_ford_path",
+        "betweenness_centrality",
+        "connected_components",
+        "minimum_spanning_tree",
+        "is_isomorphic",
+    )
 
 
 def should_run(name, args, kwargs):
     """Prefer C++ when the graph is not tiny (heuristic)."""
-    if name not in ("pagerank", "bfs_edges", "dfs_edges", "shortest_path", "dijkstra_path", "bellman_ford_path", "betweenness_centrality"):
+    if name not in (
+        "pagerank",
+        "bfs_edges",
+        "dfs_edges",
+        "shortest_path",
+        "dijkstra_path",
+        "bellman_ford_path",
+        "betweenness_centrality",
+        "connected_components",
+        "minimum_spanning_tree",
+        "is_isomorphic",
+    ):
         return False
     G = args[0] if args else kwargs.get("G", None)
     try:
@@ -295,6 +332,70 @@ def betweenness_centrality(
         return betweenness_centrality(convert_from_nx(G), k=k, normalized=normalized, weight=weight, endpoints=endpoints, seed=seed)
 
 
+def connected_components(G, method="union-find", **kwargs):
+    """
+    Compute connected components using either union-find (default) or BFS.
+    Returns components sorted by size in descending order.
+    """
+    method_normalized = method.lower().replace("_", "-")
+    if method_normalized not in ("union-find", "bfs"):
+        raise ValueError(f"Unknown method for connected_components: {method}")
+    if isinstance(G, NxCppGraph):
+        if G.is_directed():
+            raise nx.NetworkXNotImplemented("connected_components is defined for undirected graphs")
+        if method_normalized == "union-find":
+            component_ids = _cpp_connected_components_union_find(graph=G._G)
+        else:
+            component_ids = _cpp_connected_components_bfs(graph=G._G)
+        return _component_sets_from_ids(G._nodes, component_ids)
+    return connected_components(convert_from_nx(G), method=method, **kwargs)
+
+
+def connected_components_union_find(G, **kwargs):
+    return connected_components(G, method="union-find", **kwargs)
+
+
+def connected_components_bfs(G, **kwargs):
+    return connected_components(G, method="bfs", **kwargs)
+
+
+def minimum_spanning_tree(G, weight="weight", algorithm="kruskal", ignore_nan=False):
+    """
+    Minimum spanning forest via Kruskal or Prim. Returns a NetworkX Graph.
+    """
+    algo = algorithm.lower()
+    if algo not in ("kruskal", "prim"):
+        raise ValueError(f"Unknown MST algorithm: {algorithm}")
+    if isinstance(G, NxCppGraph):
+        if G.is_directed():
+            raise nx.NetworkXNotImplemented("minimum_spanning_tree requires an undirected graph")
+        edges = _cpp_minimum_spanning_tree(graph=G._G, algorithm=algo)
+        H = nx.Graph()
+        H.add_nodes_from(G._nodes)
+        for u_idx, v_idx, weight_val in edges:
+            u = G._nodes[u_idx]
+            v = G._nodes[v_idx]
+            H.add_edge(u, v, weight=float(weight_val))
+        return H
+    return minimum_spanning_tree(
+        convert_from_nx(G, weight=weight),
+        weight=weight,
+        algorithm=algo,
+        ignore_nan=ignore_nan,
+    )
+
+
+def is_isomorphic(G1, G2, **kwargs):
+    """
+    Exact graph isomorphism test using a backtracking search with heuristics.
+    """
+    H1 = G1 if isinstance(G1, NxCppGraph) else convert_from_nx(G1)
+    H2 = G2 if isinstance(G2, NxCppGraph) else convert_from_nx(G2)
+    if H1.is_directed() != H2.is_directed():
+        raise nx.NetworkXError("Graphs must both be directed or undirected")
+    return bool(_cpp_graphs_are_isomorphic(graph_a=H1._G, graph_b=H2._G))
+
+
 backend = sys.modules[__name__]
 
 
@@ -343,6 +444,24 @@ def get_info():
                     "normalized : bool": "If True, normalize by 2/((n-1)(n-2)) for undirected graphs (default True).",
                     "endpoints : bool": "If True, include endpoints in shortest path counts (default False).",
                 },
-            }
+            },
+            "connected_components": {
+                "additional_docs": "Connected components via union-find (default) or BFS.",
+                "additional_parameters": {
+                    "method : str": "Either 'union-find' (default) or 'bfs'.",
+                },
+            },
+            "minimum_spanning_tree": {
+                "additional_docs": "Minimum spanning forest using Kruskal or Prim.",
+                "additional_parameters": {
+                    "algorithm : str": "Either 'kruskal' (default) or 'prim'.",
+                    "weight : str": "Edge data key for weight extraction during conversion (default 'weight').",
+                    "ignore_nan : bool": "Ignored placeholder to mirror NetworkX API (default False).",
+                },
+            },
+            "is_isomorphic": {
+                "additional_docs": "Exact graph isomorphism via backtracking search with degree heuristics.",
+                "additional_parameters": {},
+            },
         },
     }
