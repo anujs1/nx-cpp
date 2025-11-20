@@ -106,7 +106,8 @@ def convert_from_nx(G, weight='weight', **kwargs):
     cpp_graph = CppGraph(len(nodes), edges, directed)
     t_cpp = time.time()
     
-    print(f"  [Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
+    print("")
+    print(f"[Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
     
     return NxCppGraph(cpp_graph, nodes)
 
