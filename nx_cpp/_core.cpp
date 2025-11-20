@@ -15,6 +15,7 @@
 
 namespace py = pybind11;
 
+// overarching graph struct
 struct Graph {
   int n;
   std::vector<std::vector<int>> out_adj;
@@ -158,6 +159,7 @@ GraphView build_graph_view(const Graph &G) {
   return view;
 }
 
+// Unoptimized C++ pagerank implementation
 std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
                              double tol) {
   const int n = G.n;
@@ -206,6 +208,7 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
   return pr;
 }
 
+// Unoptimized C++ bfs_edges implementation
 std::vector<int> bfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
@@ -234,6 +237,7 @@ std::vector<int> bfs_edges(const Graph &G, int source) {
   return parent;
 }
 
+// Unoptimized C++ dfs_edges implementation
 std::vector<int> dfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
@@ -287,6 +291,7 @@ std::vector<int> connected_components_union_find(const Graph &G) {
   return components;
 }
 
+// Unoptimized C++ connected_components implementation using bfs
 std::vector<int> connected_components_bfs(const Graph &G) {
   require_undirected(G, "connected_components_bfs");
   const int n = G.n;
@@ -313,6 +318,7 @@ std::vector<int> connected_components_bfs(const Graph &G) {
   return components;
 }
 
+// Unoptimized C++ minimum_spanning_tree implementation using Kruskal's algorithm
 std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
   auto edges = collect_undirected_edges(G);
@@ -336,6 +342,7 @@ std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
   return tree;
 }
 
+// Unoptimized C++ minimum_spanning_tree implementation using Prim's algorithm
 std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
   const int n = G.n;
@@ -439,6 +446,7 @@ bool iso_backtrack(int idx, const std::vector<int> &order,
   return false;
 }
 
+// Unoptimized C++ is_isomorphic implementation
 bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   if (G1.n != G2.n)
     return false;
@@ -475,7 +483,7 @@ bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   return iso_backtrack(0, order, mapping, used, view1, view2);
 }
 
-// Dijkstra's algorithm for shortest paths
+// C++ shortest_path implementation using Dijkstra's algorithm
 std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -516,7 +524,7 @@ std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int so
   return {dist, parent};
 }
 
-// Bellman-Ford algorithm for shortest paths (handles negative weights)
+// C++ shortest_path implementation using Bellman-Ford algorithm
 std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -555,7 +563,7 @@ std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, in
   return {dist, parent};
 }
 
-// Betweenness centrality using Brandes' algorithm
+// C++ betwenness_centrality implementation using Brandes' algorithm
 std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
   const int n = G.n;
   std::vector<double> bc(n, 0.0);
