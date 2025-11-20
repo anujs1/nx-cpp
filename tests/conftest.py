@@ -33,6 +33,30 @@ def usa_graph() -> nx.DiGraph:
     return G
 
 @pytest.fixture(scope="session")
+def usa_ne_graph() -> nx.DiGraph:
+    path = os.path.join(os.path.dirname(__file__), "USA-road-d.NE.gr")
+    if not os.path.isfile(path):
+        pytest.fail(f"USA NE graph file not found: {path}")
+    t0 = time.perf_counter()
+    G = load_dimacs_graph(str(path), directed=True)
+    t1 = time.perf_counter() - t0
+    print("")
+    print(f"USA NE graph load time = {t1:.3f}s")
+    return G
+
+@pytest.fixture(scope="session")
+def rome_graph() -> nx.DiGraph:
+    path = os.path.join(os.path.dirname(__file__), "rome99.gr")
+    if not os.path.isfile(path):
+        pytest.fail(f"Rome graph file not found: {path}")
+    t0 = time.perf_counter()
+    G = load_dimacs_graph(str(path), directed=True)
+    t1 = time.perf_counter() - t0
+    print("")
+    print(f"Rome graph load time = {t1:.3f}s")
+    return G
+
+@pytest.fixture(scope="session")
 def rng_seed() -> int:
     """
     session-level random seed
