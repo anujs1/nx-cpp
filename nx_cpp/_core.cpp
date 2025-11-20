@@ -14,6 +14,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
+#include <thread>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace py = pybind11;
 
@@ -23,6 +27,11 @@ struct Graph {
   std::vector<std::vector<double>> weights;  // weights[u][i] = weight of edge to out_adj[u][i]
   bool directed;
   bool weighted;
+  
+  // CSR (Compressed Sparse Row) representation for cache-efficient traversal
+  std::vector<int> csr_row_ptr;      // Row pointers: csr_row_ptr[u] = start index in csr_col_idx
+  std::vector<int> csr_col_idx;      // Column indices: neighbors of each node
+  std::vector<double> csr_weights;   // Edge weights aligned with csr_col_idx
 
   Graph(int n_, const std::vector<std::pair<int, int>> &edges, bool directed_)
       : n(n_), out_adj(n_), weights(n_), directed(directed_), weighted(false) {
@@ -37,6 +46,7 @@ struct Graph {
         weights[v].push_back(1.0);
       }
     }
+    build_csr();
   }
   
   // Constructor with weights
@@ -54,6 +64,29 @@ struct Graph {
         out_adj[v].push_back(u);
         weights[v].push_back(w);
       }
+    }
+    build_csr();
+  }
+  
+  void build_csr() {
+    csr_row_ptr.resize(n + 1, 0);
+    
+    // Count edges per node
+    size_t total_edges = 0;
+    for (int u = 0; u < n; ++u) {
+      total_edges += out_adj[u].size();
+    }
+    
+    csr_col_idx.reserve(total_edges);
+    csr_weights.reserve(total_edges);
+    
+    // Build CSR
+    for (int u = 0; u < n; ++u) {
+      for (size_t i = 0; i < out_adj[u].size(); ++i) {
+        csr_col_idx.push_back(out_adj[u][i]);
+        csr_weights.push_back(weights[u][i]);
+      }
+      csr_row_ptr[u + 1] = static_cast<int>(csr_col_idx.size());
     }
   }
 
@@ -364,46 +397,84 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
   const int n = G.n;
   if (n == 0)
     return {};
-  std::vector<double> pr(n, 1.0 / n);
-  std::vector<double> next(n, 0.0);
-  std::vector<int> outdeg(n, 0);
-  for (int u = 0; u < n; ++u)
-    outdeg[u] = static_cast<int>(G.out_adj[u].size());
 
-  for (int it = 0; it < max_iter; ++it) {
-    double dangling_sum = 0.0;
-    for (int u = 0; u < n; ++u)
-      if (outdeg[u] == 0)
-        dangling_sum += pr[u];
-
-    const double base = (1.0 - alpha) / n;
-    const double dang = alpha * dangling_sum / n;
-    for (int i = 0; i < n; ++i)
-      next[i] = base + dang;
-
-    for (int u = 0; u < n; ++u) {
-      if (outdeg[u] == 0)
-        continue;
-      const double share = alpha * pr[u] / outdeg[u];
-      for (int v : G.out_adj[u])
-        next[v] += share;
-    }
-
-    double diff = 0.0;
-    for (int i = 0; i < n; ++i)
-      diff += std::abs(next[i] - pr[i]);
-
-    // normalizing pr to ensure sum stays at 1
-    double s = std::accumulate(next.begin(), next.end(), 0.0);
-    if (s > 0)
-      for (double &x : next)
-        x /= s;
-    pr.swap(next);
-
-    // adding a normalization to diff to avoid exiting too early
-    if (diff / n < tol)
-      break;
+  const auto& row_ptr = G.csr_row_ptr;
+  const auto& col_idx = G.csr_col_idx;
+  
+  std::vector<int> in_row_ptr(n + 1, 0);
+  std::vector<int> in_col_idx;
+  
+  // Count incoming edges for each node
+  for (int v : col_idx) {
+    in_row_ptr[v + 1]++;
   }
+  
+  // Convert counts to offsets
+  for (int i = 1; i <= n; ++i) {
+    in_row_ptr[i] += in_row_ptr[i - 1];
+  }
+  
+  // Fill in_col_idx with source nodes
+  in_col_idx.resize(col_idx.size());
+  std::vector<int> temp_ptr = in_row_ptr;
+  for (int u = 0; u < n; ++u) {
+    for (int j = row_ptr[u]; j < row_ptr[u + 1]; ++j) {
+      int v = col_idx[j];
+      in_col_idx[temp_ptr[v]++] = u;
+    }
+  }
+  
+  std::vector<int> outdeg(n);
+  std::vector<double> inv_outdeg(n);
+  for (int u = 0; u < n; ++u) {
+    outdeg[u] = row_ptr[u + 1] - row_ptr[u];
+    inv_outdeg[u] = (outdeg[u] > 0) ? (1.0 / outdeg[u]) : 0.0;
+  }
+  
+  std::vector<double> pr(n, 1.0 / n);
+  std::vector<double> pr_next(n);
+  
+  const double one_minus_alpha = 1.0 - alpha;
+  const double inv_n = 1.0 / n;
+  
+  for (int it = 0; it < max_iter; ++it) {
+    std::fill(pr_next.begin(), pr_next.end(), 0.0);
+    
+    double dangling_sum = 0.0;
+    for (int u = 0; u < n; ++u) {
+      if (outdeg[u] == 0) {
+        dangling_sum += pr[u];
+      }
+    }
+    
+    const double base_value = (one_minus_alpha + alpha * dangling_sum) * inv_n;
+    
+    #pragma omp parallel for schedule(static)
+    for (int v = 0; v < n; ++v) {
+      double sum = 0.0;
+      // Iterate over incoming edges to v
+      for (int j = in_row_ptr[v]; j < in_row_ptr[v + 1]; ++j) {
+        int u = in_col_idx[j];
+        sum += pr[u] * inv_outdeg[u];
+      }
+      pr_next[v] = base_value + alpha * sum;
+    }
+    
+    double diff = 0.0;
+    #pragma omp parallel for reduction(+:diff) schedule(static)
+    for (int i = 0; i < n; ++i) {
+      diff += std::abs(pr_next[i] - pr[i]);
+    }
+    
+    // Swap buffers
+    pr.swap(pr_next);
+    
+    // Early stopping
+    if (diff < tol) {
+      break;
+    }
+  }
+  
   return pr;
 }
 
@@ -413,25 +484,31 @@ std::vector<int> bfs_edges(const Graph &G, int source) {
     return {};
   
   std::vector<int> parent(n, -1);
-  std::vector<bool> visited(n, false);
-  std::queue<int> q;
   
-  visited[source] = true;
-  q.push(source);
+  // Use vector as ring buffer - faster than std::queue
+  std::vector<int> queue;
+  queue.reserve(n);  // Pre-allocate to avoid reallocations
   
-  while (!q.empty()) {
-    int u = q.front();
-    q.pop();
+  parent[source] = source;  // Mark source as visited (self-parent)
+  queue.push_back(source);
+  
+  size_t head = 0;
+  while (head < queue.size()) {
+    int u = queue[head++];
     
-    for (int v : G.out_adj[u]) {
-      if (!visited[v]) {
-        visited[v] = true;
+    // Use CSR representation for better cache locality
+    const int start = G.csr_row_ptr[u];
+    const int end = G.csr_row_ptr[u + 1];
+    for (int i = start; i < end; ++i) {
+      int v = G.csr_col_idx[i];
+      if (parent[v] == -1) {  // Not visited
         parent[v] = u;
-        q.push(v);
+        queue.push_back(v);
       }
     }
   }
   
+  parent[source] = -1;  // Restore source to -1 for consistency
   return parent;
 }
 
@@ -441,25 +518,31 @@ std::vector<int> dfs_edges(const Graph &G, int source) {
     return {};
   
   std::vector<int> parent(n, -1);
-  std::vector<bool> visited(n, false);
-  std::stack<int> s;
   
-  visited[source] = true;
-  s.push(source);
+  // Use vector as stack - faster than std::stack
+  std::vector<int> stack;
+  stack.reserve(n);  // Pre-allocate to avoid reallocations
   
-  while (!s.empty()) {
-    int u = s.top();
-    s.pop();
+  parent[source] = source;  // Mark source as visited
+  stack.push_back(source);
+  
+  while (!stack.empty()) {
+    int u = stack.back();
+    stack.pop_back();
     
-    for (int v : G.out_adj[u]) {
-      if (!visited[v]) {
-        visited[v] = true;
+    // Use CSR representation for better cache locality
+    const int start = G.csr_row_ptr[u];
+    const int end = G.csr_row_ptr[u + 1];
+    for (int i = start; i < end; ++i) {
+      int v = G.csr_col_idx[i];
+      if (parent[v] == -1) {  // Not visited
         parent[v] = u;
-        s.push(v);
+        stack.push_back(v);
       }
     }
   }
   
+  parent[source] = -1;  // Restore source to -1 for consistency
   return parent;
 }
 
@@ -891,12 +974,16 @@ std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int so
     auto [d, u] = pq.top();
     pq.pop();
     
+    // Skip if we've already found a better path
     if (d > dist[u])
       continue;
     
-    for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
-      int v = G.out_adj[u][i];
-      double w = G.weights[u][i];
+    // Use CSR representation for cache-efficient edge access
+    const int start = G.csr_row_ptr[u];
+    const int end = G.csr_row_ptr[u + 1];
+    for (int i = start; i < end; ++i) {
+      int v = G.csr_col_idx[i];
+      double w = G.csr_weights[i];
       double new_dist = dist[u] + w;
       
       if (new_dist < dist[v]) {
@@ -910,7 +997,8 @@ std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int so
   return {dist, parent};
 }
 
-// Bellman-Ford algorithm for shortest paths (handles negative weights)
+// Bellman-Ford algorithm using parallel delta-stepping inspired approach
+// Combines SPFA queue-based optimization with parallelization
 std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -923,108 +1011,280 @@ std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, in
   
   dist[source] = 0.0;
   
-  // Relax edges n-1 times
-  for (int iter = 0; iter < n - 1; ++iter) {
-    bool updated = false;
-    for (int u = 0; u < n; ++u) {
-      if (dist[u] == INF)
-        continue;
+  // For small graphs, use sequential SPFA
+  if (n < 1000) {
+    // SPFA: Use queue to only process nodes that have been updated
+    std::vector<bool> in_queue(n, false);
+    std::vector<int> count(n, 0);
+    std::vector<int> queue;
+    queue.reserve(n);
+    
+    queue.push_back(source);
+    in_queue[source] = true;
+    count[source]++;
+    
+    size_t head = 0;
+    while (head < queue.size()) {
+      int u = queue[head++];
+      in_queue[u] = false;
       
-      for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
-        int v = G.out_adj[u][i];
-        double w = G.weights[u][i];
+      const int start = G.csr_row_ptr[u];
+      const int end = G.csr_row_ptr[u + 1];
+      for (int i = start; i < end; ++i) {
+        int v = G.csr_col_idx[i];
+        double w = G.csr_weights[i];
         double new_dist = dist[u] + w;
         
         if (new_dist < dist[v]) {
           dist[v] = new_dist;
           parent[v] = u;
-          updated = true;
+          
+          if (!in_queue[v]) {
+            queue.push_back(v);
+            in_queue[v] = true;
+            count[v]++;
+            
+            if (count[v] > n) {
+              return {dist, parent};
+            }
+          }
         }
       }
     }
-    if (!updated)
+    return {dist, parent};
+  }
+  
+  // Parallel Bellman-Ford for larger graphs
+  // Use level-synchronous relaxation with per-thread work queues
+  std::vector<bool> in_current(n, false);
+  std::vector<bool> in_next(n, false);
+  std::vector<int> current_frontier;
+  std::vector<int> next_frontier;
+  
+  current_frontier.push_back(source);
+  in_current[source] = true;
+  
+  int max_iterations = n;  // Prevent infinite loops
+  
+  for (int iter = 0; iter < max_iterations; ++iter) {
+    if (current_frontier.empty())
       break;
+    
+    next_frontier.clear();
+    std::fill(in_next.begin(), in_next.end(), false);
+    
+    // Parallel edge relaxation
+    #pragma omp parallel
+    {
+      std::vector<int> local_next;
+      local_next.reserve(current_frontier.size());
+      
+      #pragma omp for schedule(dynamic, 64) nowait
+      for (size_t idx = 0; idx < current_frontier.size(); ++idx) {
+        int u = current_frontier[idx];
+        double dist_u = dist[u];
+        
+        const int start = G.csr_row_ptr[u];
+        const int end = G.csr_row_ptr[u + 1];
+        
+        for (int i = start; i < end; ++i) {
+          int v = G.csr_col_idx[i];
+          double w = G.csr_weights[i];
+          double new_dist = dist_u + w;
+          
+          // Check if update is needed (read-only, no synchronization needed for check)
+          if (new_dist < dist[v]) {
+            bool updated = false;
+            
+            // Critical section for atomic distance update
+            #pragma omp critical(dist_update)
+            {
+              if (new_dist < dist[v]) {
+                dist[v] = new_dist;
+                parent[v] = u;
+                updated = true;
+              }
+            }
+            
+            // Add to next frontier if we updated and not already marked
+            if (updated && !in_next[v]) {
+              #pragma omp critical(frontier_update)
+              {
+                if (!in_next[v]) {
+                  in_next[v] = true;
+                  local_next.push_back(v);
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Merge local next frontiers
+      #pragma omp critical
+      {
+        next_frontier.insert(next_frontier.end(), local_next.begin(), local_next.end());
+      }
+    }
+    
+    current_frontier.swap(next_frontier);
+    in_current.swap(in_next);
   }
   
   return {dist, parent};
 }
 
-// Betweenness centrality using Brandes' algorithm
+// Betweenness centrality using Brandes' algorithm (per-source parallelized)
 std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
   const int n = G.n;
   std::vector<double> bc(n, 0.0);
-  
   if (n == 0)
     return bc;
-  
-  // For each source node
-  for (int s = 0; s < n; ++s) {
-    std::stack<int> S;
-    std::vector<std::vector<int>> P(n);  // predecessors
-    std::vector<int> sigma(n, 0);        // number of shortest paths
-    std::vector<int> dist(n, -1);        // distance from source
-    std::vector<double> delta(n, 0.0);   // dependency
-    
-    sigma[s] = 1;
-    dist[s] = 0;
-    
-    // BFS
-    std::queue<int> Q;
-    Q.push(s);
-    
-    while (!Q.empty()) {
-      int v = Q.front();
-      Q.pop();
-      S.push(v);
-      
-      for (int w : G.out_adj[v]) {
-        // First time visiting w?
-        if (dist[w] < 0) {
-          Q.push(w);
-          dist[w] = dist[v] + 1;
+
+  // Decide thread count (cap at n to avoid spawning excess threads for tiny graphs)
+  unsigned int hw = std::thread::hardware_concurrency();
+  int num_threads = static_cast<int>(hw == 0 ? 1 : hw);
+  num_threads = std::min(num_threads, n);
+  // For very small graphs, single-thread avoids overhead.
+  if (n < 256) {
+    num_threads = 1;
+  }
+
+  if (num_threads <= 1) {
+    // Sequential fallback with CSR optimization
+    std::vector<int> Q;  // Ring buffer for BFS
+    Q.reserve(n);
+    for (int s = 0; s < n; ++s) {
+      std::stack<int> S;
+      std::vector<std::vector<int>> P(n);
+      std::vector<int> sigma(n, 0);
+      std::vector<int> dist(n, -1);
+      std::vector<double> delta(n, 0.0);
+      sigma[s] = 1;
+      dist[s] = 0;
+      Q.clear();
+      Q.push_back(s);
+      size_t head = 0;
+      while (head < Q.size()) {
+        int v = Q[head++];
+        S.push(v);
+        // Use CSR for cache-efficient neighbor access
+        const int start = G.csr_row_ptr[v];
+        const int end = G.csr_row_ptr[v + 1];
+        for (int i = start; i < end; ++i) {
+          int w = G.csr_col_idx[i];
+          if (dist[w] < 0) {
+            Q.push_back(w);
+            dist[w] = dist[v] + 1;
+          }
+          if (dist[w] == dist[v] + 1) {
+            sigma[w] += sigma[v];
+            P[w].push_back(v);
+          }
         }
-        // Shortest path to w via v?
-        if (dist[w] == dist[v] + 1) {
-          sigma[w] += sigma[v];
-          P[w].push_back(v);
+      }
+      while (!S.empty()) {
+        int w = S.top();
+        S.pop();
+        for (int v : P[w]) {
+          delta[v] += (static_cast<double>(sigma[v]) / sigma[w]) * (1.0 + delta[w]);
+        }
+        if (w != s) {
+          bc[w] += delta[w];
         }
       }
     }
-    
-    // Accumulation phase
-    while (!S.empty()) {
-      int w = S.top();
-      S.pop();
-      
-      for (int v : P[w]) {
-        delta[v] += (static_cast<double>(sigma[v]) / sigma[w]) * (1.0 + delta[w]);
+  } else {
+    // Parallel per-source Brandes: each thread processes a contiguous range of sources.
+    std::vector<std::vector<double>> thread_bc(num_threads, std::vector<double>(n, 0.0));
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    auto worker = [&](int tid, int start_s, int end_s) {
+      std::vector<std::vector<int>> P(n);
+      std::vector<int> sigma(n);
+      std::vector<int> dist(n);
+      std::vector<double> delta(n);
+      std::stack<int> S;
+      std::vector<int> Q;  // Ring buffer for BFS
+      Q.reserve(n);
+      for (int s = start_s; s < end_s; ++s) {
+        // Reset per-source structures efficiently
+        for (int i = 0; i < n; ++i) {
+          P[i].clear();
+        }
+        std::fill(sigma.begin(), sigma.end(), 0);
+        std::fill(dist.begin(), dist.end(), -1);
+        std::fill(delta.begin(), delta.end(), 0.0);
+        while (!S.empty()) S.pop();
+        Q.clear();
+        sigma[s] = 1;
+        dist[s] = 0;
+        Q.push_back(s);
+        // BFS phase with CSR
+        size_t head = 0;
+        while (head < Q.size()) {
+          int v = Q[head++];
+          S.push(v);
+          // Use CSR for cache-efficient neighbor access
+          const int start = G.csr_row_ptr[v];
+          const int end = G.csr_row_ptr[v + 1];
+          for (int i = start; i < end; ++i) {
+            int w = G.csr_col_idx[i];
+            if (dist[w] < 0) {
+              Q.push_back(w);
+              dist[w] = dist[v] + 1;
+            }
+            if (dist[w] == dist[v] + 1) {
+              sigma[w] += sigma[v];
+              P[w].push_back(v);
+            }
+          }
+        }
+        // Accumulation phase
+        while (!S.empty()) {
+          int w = S.top();
+          S.pop();
+          for (int v : P[w]) {
+            delta[v] += (static_cast<double>(sigma[v]) / sigma[w]) * (1.0 + delta[w]);
+          }
+          if (w != s) {
+            thread_bc[tid][w] += delta[w];
+          }
+        }
       }
-      
-      if (w != s) {
-        bc[w] += delta[w];
+    };
+    // Partition sources into roughly equal contiguous blocks.
+    int base = n / num_threads;
+    int rem = n % num_threads;
+    int cur = 0;
+    for (int t = 0; t < num_threads; ++t) {
+      int len = base + (t < rem ? 1 : 0);
+      int start = cur;
+      int end = start + len;
+      cur = end;
+      threads.emplace_back(worker, t, start, end);
+    }
+    for (auto &th : threads) th.join();
+    // Reduction step (deterministic order)
+    for (int t = 0; t < num_threads; ++t) {
+      for (int i = 0; i < n; ++i) {
+        bc[i] += thread_bc[t][i];
       }
     }
   }
-  
+
   // Normalization / scaling to match NetworkX
   if (normalized && n > 2) {
-    // For undirected graphs, NetworkX normalized value equals
-    // (unnormalized/2) * (2/((n-1)(n-2))) = unnormalized * (1/((n-1)(n-2)))
     double scale = 1.0 / ((n - 1) * (n - 2));
     for (int i = 0; i < n; ++i)
       bc[i] *= scale;
   } else if (!G.directed) {
-    // Unnormalized undirected values are divided by 2
     for (int i = 0; i < n; ++i)
       bc[i] /= 2.0;
   }
-  
-  // Handle endpoints
   if (endpoints) {
-    // The standard Brandes algorithm doesn't count endpoints
-    // If endpoints=True, we add them back (not implemented in this basic version)
+    // Endpoints option not implemented; placeholder retained.
   }
-  
   return bc;
 }
 
