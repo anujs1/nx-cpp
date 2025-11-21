@@ -221,61 +221,70 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
 }
 
 // Unoptimized C++ bfs_edges implementation
-std::vector<int> bfs_edges(const Graph &G, int source) {
+std::vector<std::pair<int, int>> bfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
     return {};
-  
-  std::vector<int> parent(n, -1);
+
+  std::vector<std::pair<int, int>> edges;
   std::vector<bool> visited(n, false);
   std::queue<int> q;
-  
+
   visited[source] = true;
   q.push(source);
-  
+
   while (!q.empty()) {
     int u = q.front();
     q.pop();
-    
+
     for (int v : G.out_adj[u]) {
       if (!visited[v]) {
         visited[v] = true;
-        parent[v] = u;
         q.push(v);
+        edges.emplace_back(u, v);
       }
     }
   }
-  
-  return parent;
+
+  return edges;
 }
 
 // Unoptimized C++ dfs_edges implementation
-std::vector<int> dfs_edges(const Graph &G, int source) {
+std::vector<std::pair<int, int>> dfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
     return {};
   
-  std::vector<int> parent(n, -1);
+  std::vector<std::pair<int, int>> edges;
   std::vector<bool> visited(n, false);
-  std::stack<int> s;
+  std::vector<std::pair<int, std::size_t>> stack;
   
   visited[source] = true;
-  s.push(source);
+  stack.emplace_back(source, 0);
   
-  while (!s.empty()) {
-    int u = s.top();
-    s.pop();
+  while (!stack.empty()) {
+    int u = stack.back().first;
+    std::size_t &idx = stack.back().second;
+    const auto &nbrs = G.out_adj[u];
+    while (idx < nbrs.size() && visited[nbrs[idx]]) {
+      idx++;
+    }
+    if (idx >= nbrs.size()) {
+      // no more children -> backtrack
+      stack.pop_back();
+      continue;
+    }
+    int v = nbrs[idx];
+    idx++; // next time we come back to u, resume from following neighbor
     
-    for (int v : G.out_adj[u]) {
-      if (!visited[v]) {
-        visited[v] = true;
-        parent[v] = u;
-        s.push(v);
-      }
+    if (!visited[v]) {
+      visited[v] = true;
+      edges.emplace_back(u, v);
+      stack.emplace_back(v, 0);
     }
   }
   
-  return parent;
+  return edges;
 }
 
 std::vector<int> connected_components_union_find(const Graph &G) {
@@ -671,10 +680,10 @@ PYBIND11_MODULE(_nx_cpp, m) {
         "Minimal unweighted PageRank implementation.");
   
   m.def("bfs_edges", &bfs_edges, py::arg("graph"), py::arg("source"),
-        "BFS traversal returning parent array for edge reconstruction.");
+        "BFS edge traversal");
   
   m.def("dfs_edges", &dfs_edges, py::arg("graph"), py::arg("source"),
-        "DFS traversal returning parent array for edge reconstruction.");
+        "DFS edge traversal");
   
   m.def("dijkstra", &dijkstra, py::arg("graph"), py::arg("source"),
         "Dijkstra's algorithm returning distances and parent array.");

@@ -65,9 +65,9 @@ def convert_from_nx(G, weight='weight', **kwargs):
     - Parallel edges collapsed (no multigraph support)
     - Supports weighted graphs via weight parameter
     """
-    t_start = time.time()
+    # t_start = time.time()
     nodes = list(G.nodes())
-    t_nodes = time.time()
+    # t_nodes = time.time()
     
     index = {n: i for i, n in enumerate(nodes)}
     directed = G.is_directed()
@@ -102,12 +102,12 @@ def convert_from_nx(G, weight='weight', **kwargs):
         else:
             edges = [(index[u], index[v]) for (u, v) in G.edges()]
     
-    t_edges = time.time()
+    # t_edges = time.time()
     cpp_graph = CppGraph(len(nodes), edges, directed)
-    t_cpp = time.time()
+    # t_cpp = time.time()
     
-    print("")
-    print(f"[Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
+    # print("")
+    # print(f"[Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
     
     return NxCppGraph(cpp_graph, nodes)
 
@@ -171,8 +171,6 @@ def pagerank(
     Only alpha, max_iter, weight, tol are used; other kwargs being used leads to Python fallback
     """
     if personalization is not None or nstart is not None or (weight != 'weight' and weight is not None) or dangling is not None:
-        print("failed 1")
-        print(personalization, nstart, weight, dangling)
         G = convert_to_nx(G)
         return nx.pagerank(
             G,
@@ -222,10 +220,10 @@ def pagerank(
 def bfs_edges(G, source, reverse=False, depth_limit=None, sort_neighbors=None):
     """
     Backend implementation for nx.bfs_edges
-    Only reverse is supported; other kwargs being used leads to Python fallback
+    Only basic BFS is supported; other kwargs being used leads to Python fallback
     Returns an iterator of edges in BFS order from source
     """
-    if depth_limit is not None or sort_neighbors is not None:
+    if depth_limit is not None or sort_neighbors is not None or reverse:
         G = convert_to_nx(G)
         return nx.bfs_edges(
             G,
@@ -241,20 +239,21 @@ def bfs_edges(G, source, reverse=False, depth_limit=None, sort_neighbors=None):
             if source_idx == -1:
                 raise nx.NodeNotFound(f"Source node {source} not in graph")
             
-            parent = _cpp_bfs_edges(graph=G._G, source=source_idx)
+            raw_edges = _cpp_bfs_edges(graph=G._G, source=source_idx)
             edges = []
-            for v_idx, u_idx in enumerate(parent):
+            for u_idx, v_idx in raw_edges:
                 if u_idx != -1:
                     u, v = nodes[u_idx], nodes[v_idx]
                     edges.append((u, v) if not reverse else (v, u))
             return iter(edges)
         elif isinstance(G, CppGraph):
-            if source < 0 or source >= len(G.edges()):
+            # if source < 0 or source >= len(G.edges()):
+            if source < 0 or source >= G.n:
                 raise nx.NodeNotFound(f"Source node {source} not in graph")
             
-            parent = _cpp_bfs_edges(graph=G, source=source)
+            raw_edges = _cpp_bfs_edges(graph=G, source=source)
             edges = []
-            for v, u in enumerate(parent):
+            for u, v in raw_edges:
                 if u != -1:
                     edges.append((u, v) if not reverse else (v, u))
             return iter(edges)
@@ -298,20 +297,21 @@ def dfs_edges(G, source, depth_limit=None, sort_neighbors=None):
             if source_idx == -1:
                 raise nx.NodeNotFound(f"Source node {source} not in graph")
             
-            parent = _cpp_dfs_edges(graph=G._G, source=source_idx)
+            raw_edges = _cpp_dfs_edges(graph=G._G, source=source_idx)
             edges = []
-            for v_idx, u_idx in enumerate(parent):
+            for u_idx, v_idx in raw_edges:
                 if u_idx != -1:
                     u, v = nodes[u_idx], nodes[v_idx]
                     edges.append((u, v))
             return iter(edges)
         elif isinstance(G, CppGraph):
-            if source < 0 or source >= len(G.edges()):
+            # if source < 0 or source >= len(G.edges()):
+            if source < 0 or source >= G.n:
                 raise nx.NodeNotFound(f"Source node {source} not in graph")
             
-            parent = _cpp_dfs_edges(graph=G, source=source)
+            raw_edges = _cpp_dfs_edges(graph=G, source=source)
             edges = []
-            for v, u in enumerate(parent):
+            for u, v in raw_edges:
                 if u != -1:
                     edges.append((u, v))
             return iter(edges)

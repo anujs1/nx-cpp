@@ -10,29 +10,21 @@ def compare_pageranks(pr_py, pr_cpp, tol=1e-6, msg_prefix=""):
             f"{msg_prefix} mismatch on node {node}: {a} vs {b}"
         )
 
-# UNIT TESTS
+# UNIT TESTS (CORRECTNESS)
 
 @pytest.mark.unit
 def test_pagerank_simple_triangle():
-    G = nx.DiGraph()
-    G.add_edges_from([(1, 2), (2, 3), (3, 1)])
-
-    pr_py = nx.pagerank(G, alpha=0.85)
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
-
+    G = nx.DiGraph([(1, 2), (2, 3), (3, 1)])
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
     compare_pageranks(pr_py, pr_cpp, msg_prefix="triangle:")
-
 
 @pytest.mark.unit
 def test_pagerank_disconnected_components():
-    G = nx.DiGraph()
-    G.add_edges_from([(1, 2), (2, 1), (3, 4), (4, 3)])
-
-    pr_py = nx.pagerank(G, alpha=0.85)
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
-
+    G = nx.DiGraph([(1, 2), (2, 1), (3, 4), (4, 3)])
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
     compare_pageranks(pr_py, pr_cpp, msg_prefix="disconnected:")
-
 
 @pytest.mark.unit
 def test_pagerank_star_graph():
@@ -41,106 +33,221 @@ def test_pagerank_star_graph():
     for i in range(1, 6):
         G.add_edge(center, i)
 
-    pr_py = nx.pagerank(G, alpha=0.85)
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
-
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
     compare_pageranks(pr_py, pr_cpp, msg_prefix="star:")
 
+@pytest.mark.unit
+def test_pagerank_mixed_node_types():
+    G = nx.DiGraph()
+    G.add_edges_from([
+        (0, "A"),
+        ("A", 3.14),
+        (3.14, (1, 2)),
+        ((1, 2), 0)
+    ])
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="mixed_node_types:")
 
 @pytest.mark.unit
 def test_pagerank_random_small(rng_seed):
-    G = nx.gnp_random_graph(50, 0.1, directed=True, seed=rng_seed)
-
-    pr_py = nx.pagerank(G, alpha=0.85)
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
-
+    G = nx.gnp_random_graph(200, 0.05, directed=True, seed=rng_seed)
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
     compare_pageranks(pr_py, pr_cpp, msg_prefix="random_small:")
+
+@pytest.mark.unit
+def test_pagerank_random_large(rng_seed):
+    G = nx.gnp_random_graph(5000, 0.02, directed=True, seed=rng_seed)
+    pr_py = nx.pagerank(G)
+    pr_cpp = nx.pagerank(G, backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="random_large:")
 
 # GRACEFUL FALLBACK TESTS
 
 @pytest.mark.graceful_fallback
-def test_pagerank_cpp_exception_falls_back(monkeypatch):
+def test_pagerank_cpp_exception_falls_back(monkeypatch, rng_seed):
     """
-    Simulate a failure in the C++ backend and assert that
-    nx.pagerank(..., backend='cpp') falls back to the pure Python impl.
-
-    Contract:
-    - C++ failure must NOT crash user code
-    - Result must match Python pagerank
+    simulate a failure in the C++ backend and assert that pagerank falls back to the Python backend
     """
     import nx_cpp.backend as cpp_backend
 
-    G = nx.gnp_random_graph(40, 0.15, directed=True, seed=123)
-    pr_py = nx.pagerank(G, alpha=0.85)
+    G = nx.gnp_random_graph(100, 0.05, directed=True, seed=rng_seed)
+    pr_py = nx.pagerank(G)
 
-    def boom(*args, **kwargs):
-        raise RuntimeError("Simulated C++ pagerank failure")
+    def fail(*args, **kwargs):
+        raise RuntimeError("Simulated C++ error")
 
-    # Patch the imported C++ function inside the backend module
-    monkeypatch.setattr(cpp_backend, "_cpp_pagerank", boom, raising=True)
+    # patch the imported C++ function inside the backend module
+    monkeypatch.setattr(cpp_backend, "_cpp_pagerank", fail, raising=True)
 
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
+    pr_cpp = nx.pagerank(G, backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="fallback_cpp_exception:")
 
-    compare_pageranks(pr_py, pr_cpp, msg_prefix="graceful_fallback:")
+@pytest.mark.graceful_fallback
+def test_pagerank_weight_falls_back():
+    """
+    if weight is not 'weight' or None, falls back to Python
+    """
+    G = nx.DiGraph()
+    G.add_edge(0, 1, w=4)
+    G.add_edge(1, 2, w=2)
+    pr_py = nx.pagerank(G, weight="w")
+    pr_cpp = nx.pagerank(G, weight="w", backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="fallback_weight:")
 
+@pytest.mark.graceful_fallback
+def test_pagerank_personalization_falls_back():
+    """
+    personalization is unsupported -> must fall back
+    """
+    G = nx.DiGraph([(0, 1), (1, 2), (2, 0)])
+    p = {0: 0.5, 1: 0.3, 2: 0.2}
+    pr_py = nx.pagerank(G, personalization=p)
+    pr_cpp = nx.pagerank(G, personalization=p, backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="fallback_personalization:")
+
+
+@pytest.mark.graceful_fallback
+def test_pagerank_nstart_falls_back():
+    """
+    nstart is unsupported -> must fall back
+    """
+    G = nx.DiGraph([(0, 1), (1, 2)])
+    nstart = {0: 0.9, 1: 0.1, 2: 0.0}
+    pr_py = nx.pagerank(G, nstart=nstart)
+    pr_cpp = nx.pagerank(G, nstart=nstart, backend="cpp", )
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="fallback_nstart:")
+
+@pytest.mark.graceful_fallback
+def test_pagerank_dangling_falls_back():
+    """
+    dangling is unsupported -> must fall back
+    """
+    G = nx.DiGraph([(0, 1), (1, 2)])
+    pr_py = nx.pagerank(G, dangling={0: 0.5, 1: 0.3, 2: 0.2})
+    pr_cpp = nx.pagerank(G, dangling={0: 0.5, 1: 0.3, 2: 0.2}, backend="cpp")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="fallback_dangling:")
 
 # NYC ROAD TEST (CORRECTNESS & SPEEDUP)
 
 @pytest.mark.nyc
 @pytest.mark.performance
-def test_pagerank_nyc_correctness_and_timing(nyc_graph):
+def test_pagerank_nyc_correctness_and_speedup(nyc_graph):
     G = nyc_graph
+    # manually clearing cache from previous tests
+    G.__networkx_cache__.clear()
 
     t0 = time.perf_counter()
-    pr_py = nx.pagerank(G, alpha=0.85)
+    pr_py = nx.pagerank(G)
     t_py = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
+    pr_cpp = nx.pagerank(G, backend="cpp")
     t_cpp = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G, backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
+
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
 
     compare_pageranks(pr_py, pr_cpp, msg_prefix="NYC:")
 
     assert abs(sum(pr_cpp.values()) - 1.0) < 1e-6
 
-    if t_cpp > 0:
-        speedup = t_py / t_cpp
-    else:
-        speedup = float("inf")
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
 
+    print("")
     print(
-        f"[NYC PageRank] python={t_py:.3f}s cpp={t_cpp:.3f}s "
-        f"speedup={speedup:.2f}x"
+        "[NYC PageRank]\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
     )
 
     assert speedup > 1.0
 
-# USA ROAD TEST (SPEEDUP)
+# USA-NORTHEAST ROAD TEST (SPEEDUP)
 
-# @pytest.mark.usa
-# @pytest.mark.performance
-# def test_pagerank_usa_speedup(usa_graph):
-#     """
-#     Focused on speedup since any correctness issues should be caught in NYC test
-#     """
-#     G = usa_graph
+@pytest.mark.usa_ne
+@pytest.mark.performance
+def test_pagerank_usa_ne_speedup(usa_ne_graph):
+    """
+    focused on speedup since any correctness issues should be caught in NYC test
+    """
+    G = usa_ne_graph
+    # manually clearing cache from previous tests
+    G.__networkx_cache__.clear()
 
-#     t0 = time.perf_counter()
-#     _ = nx.pagerank(G, alpha=0.85)
-#     t_py = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G)
+    t_py = time.perf_counter() - t0
 
-#     t0 = time.perf_counter()
-#     _ = nx.pagerank(G, alpha=0.85, backend="cpp")
-#     t_cpp = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G, backend="cpp")
+    t_cpp = time.perf_counter() - t0
 
-#     if t_cpp > 0:
-#         speedup = t_py / t_cpp
-#     else:
-#         speedup = float("inf")
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G, backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
 
-#     print(
-#         f"[USA PageRank] python={t_py:.3f}s cpp={t_cpp:.3f}s "
-#         f"speedup={speedup:.2f}x"
-#     )
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
 
-#     assert speedup > 1.0
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+    
+    print("")
+    print(
+        "[USA North-East PageRank]\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
+
+    assert speedup > 1.0
+
+# USA-EAST ROAD TEST (SPEEDUP)
+
+@pytest.mark.usa_e
+@pytest.mark.performance
+@pytest.mark.slow
+def test_pagerank_usa_e_speedup(usa_e_graph):
+    """
+    focused on speedup since any correctness issues should be caught in NYC test
+    """
+    G = usa_e_graph
+    # manually clearing cache from previous tests
+    G.__networkx_cache__.clear()
+
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G)
+    t_py = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G, backend="cpp")
+    t_cpp = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    _ = nx.pagerank(G, backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
+
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
+
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+
+    print("")
+    print(
+        "[USA East PageRank]\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
+
+    assert speedup > 1.0
