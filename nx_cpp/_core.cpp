@@ -584,6 +584,39 @@ std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, in
   return {dist, parent};
 }
 
+// C++ shortest_path implementation for unweighted graphs (BFS)
+std::pair<std::vector<double>, std::vector<int>> unweighted_shortest_path(const Graph &G, int source) {
+  const int n = G.n;
+  const double INF = std::numeric_limits<double>::infinity();
+
+  std::vector<double> dist(n, INF);
+  std::vector<int> parent(n, -1);
+
+  if (source < 0 || source >= n)
+    return {dist, parent};
+
+  std::queue<int> q;
+  dist[source] = 0.0;
+  q.push(source);
+
+  while (!q.empty()) {
+    int u = q.front();
+    q.pop();
+
+    // all edges have weight 1
+    for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
+      int v = G.out_adj[u][i];
+      if (dist[v] == INF) {
+        dist[v] = dist[u] + 1.0;
+        parent[v] = u;
+        q.push(v);
+      }
+    }
+  }
+
+  return {dist, parent};
+}
+
 // C++ betwenness_centrality implementation using Brandes' algorithm
 std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
   const int n = G.n;
@@ -654,12 +687,6 @@ std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool
       bc[i] /= 2.0;
   }
   
-  // Handle endpoints
-  if (endpoints) {
-    // The standard Brandes algorithm doesn't count endpoints
-    // If endpoints=True, we add them back (not implemented in this basic version)
-  }
-  
   return bc;
 }
 
@@ -691,6 +718,9 @@ PYBIND11_MODULE(_nx_cpp, m) {
   m.def("bellman_ford", &bellman_ford, py::arg("graph"), py::arg("source"),
         "Bellman-Ford algorithm returning distances and parent array.");
   
+  m.def("unweighted_shortest_path", &unweighted_shortest_path, py::arg("graph"), py::arg("source"),
+        "Unweighted shortest path using BFS");
+
   m.def("betweenness_centrality", &betweenness_centrality, 
         py::arg("graph"), py::arg("normalized") = true, py::arg("endpoints") = false,
         "Betweenness centrality using Brandes' algorithm.");

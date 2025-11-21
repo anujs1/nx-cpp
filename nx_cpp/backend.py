@@ -12,14 +12,13 @@ from ._nx_cpp import (
     dfs_edges as _cpp_dfs_edges,
     dijkstra as _cpp_dijkstra,
     bellman_ford as _cpp_bellman_ford,
+    unweighted_shortest_path as _cpp_unweighted_shortest_path,
     betweenness_centrality as _cpp_betweenness_centrality,
     connected_components_union_find as _cpp_connected_components_union_find,
     connected_components_bfs as _cpp_connected_components_bfs,
     minimum_spanning_tree as _cpp_minimum_spanning_tree,
     graphs_are_isomorphic as _cpp_graphs_are_isomorphic,
 )
-
-
 class NxCppGraph:
     """
     Minimal backend graph wrapper understood by NetworkX dispatch
@@ -28,9 +27,10 @@ class NxCppGraph:
 
     __networkx_backend__ = "cpp"
 
-    def __init__(self, cpp_graph: CppGraph, nodes):
+    def __init__(self, cpp_graph: CppGraph, nodes, orig_graph=None):
         self._G = cpp_graph
         self._nodes = list(nodes)
+        self._orig_graph = orig_graph
         # Fast label->index map for non-integer / string labels
         try:
             self._index = {n: i for i, n in enumerate(self._nodes)}
@@ -109,12 +109,14 @@ def convert_from_nx(G, weight='weight', **kwargs):
     # print("")
     # print(f"[Conversion] nodes: {t_nodes - t_start:.3f}s, edges: {t_edges - t_nodes:.3f}s, cpp_graph: {t_cpp - t_edges:.3f}s, total: {t_cpp - t_start:.3f}s")
     
-    return NxCppGraph(cpp_graph, nodes)
+    return NxCppGraph(cpp_graph, nodes, orig_graph=G)
 
 
 def convert_to_nx(obj, **kwargs):
     """NxCppGraph -> NetworkX Graph/DiGraph (no attributes)"""
     if isinstance(obj, NxCppGraph):
+        if getattr(obj, "_orig_graph", None) is not None:
+            return obj._orig_graph
         H = nx.DiGraph() if obj.is_directed() else nx.Graph()
         H.add_nodes_from(obj._nodes)
         H.add_edges_from(obj._edges_py())
@@ -133,8 +135,6 @@ def can_run(name, args, kwargs):
         "bfs_edges",
         "dfs_edges",
         "shortest_path",
-        "dijkstra_path",
-        "bellman_ford_path",
         "betweenness_centrality",
         "connected_components",
         "minimum_spanning_tree",
@@ -325,68 +325,87 @@ def dfs_edges(G, source, depth_limit=None, sort_neighbors=None):
         return nx.dfs_edges(G, source=source, depth_limit=depth_limit, sort_neighbors=sort_neighbors)
 
 
-def shortest_path(G, source, target=None, weight='weight', method='dijkstra'):
+def shortest_path_pair(G, source, target, weight, method):
+    """
+    shortest path between source and target using C++ backend
+    """
+    nodes = G._nodes
+
+    source_idx = G._index.get(source, -1)
+    if source_idx == -1:
+        raise nx.NodeNotFound(f"Source node {source} not in graph")
+
+    target_idx = G._index.get(target, -1)
+    if target_idx == -1:
+        raise nx.NodeNotFound(f"Target node {target} not in graph")
+
+    # choose algorithm
+    if weight is None:
+        # unweighted, ignore method
+        distances, parent = _cpp_unweighted_shortest_path(graph=G._G, source=source_idx)
+    elif weight == "weight":
+        if method == "dijkstra":
+            distances, parent = _cpp_dijkstra(graph=G._G, source=source_idx)
+        else:
+            distances, parent = _cpp_bellman_ford(graph=G._G, source=source_idx)
+    else:
+        raise ValueError("Unsupported weight attribute for C++ backend")
+
+    if distances[target_idx] == float("inf"):
+        raise nx.NetworkXNoPath(f"No path from {source} to {target}")
+
+    # reconstruct path
+    path_indices = []
+    curr = target_idx
+    while curr != -1:
+        path_indices.append(curr)
+        curr = parent[curr]
+    path_indices.reverse()
+
+    return [nodes[i] for i in path_indices]
+
+
+def shortest_path(G, source=None, target=None, weight=None, method="dijkstra"):
     """
     Backend implementation for nx.shortest_path
-    Supports Dijkstra's algorithm (default) and Bellman-Ford
-    Returns the shortest path from source to target, or a dict of paths to all nodes if target is None
+    Only used for the (source, target) pair case; other arguments being used leads to Python fallback
     """
+    if source is None or target is None or method not in ("dijkstra", "bellman-ford") or weight not in ("weight", None):
+        G = convert_to_nx(G)
+        return nx.shortest_path(
+            G,
+            source=source,
+            target=target,
+            weight=weight,
+            method=method
+        )
+
     try:
         if isinstance(G, NxCppGraph):
-            nodes = G._nodes
-            source_idx = G._index.get(source, -1)
-            if source_idx == -1:
-                raise nx.NodeNotFound(f"Source node {source} not in graph")
-            
-            # choose algorithm
-            t_algo_start = time.time()
-            if method == 'dijkstra':
-                distances, parent = _cpp_dijkstra(graph=G._G, source=source_idx)
-            elif method == 'bellman-ford':
-                distances, parent = _cpp_bellman_ford(graph=G._G, source=source_idx)
-            else:
-                raise ValueError(f"Unknown method: {method}")
-            t_algo_end = time.time()
-            print("")
-            print(f"[C++ {method}] algorithm time: {t_algo_end - t_algo_start:.3f}s")
-            
-            # reconstruct paths
-            t_recon_start = time.time()
-            def get_path(target_idx):
-                if distances[target_idx] == float('inf'):
-                    raise nx.NetworkXNoPath(f"No path from {source} to {nodes[target_idx]}")
-                path = []
-                current = target_idx
-                while current != -1:
-                    path.append(nodes[current])
-                    current = parent[current]
-                return list(reversed(path))
-            
-            if target is not None:
-                target_idx = G._index.get(target, -1)
-                if target_idx == -1:
-                    raise nx.NodeNotFound(f"Target node {target} not in graph")
-                result = get_path(target_idx)
-            else:
-                # return dict of paths to all reachable nodes
-                paths = {}
-                for i, node in enumerate(nodes):
-                    if distances[i] != float('inf'):
-                        paths[node] = get_path(i)
-                result = paths
-            t_recon_end = time.time()
-            print("")
-            print(f"Path reconstruction time: {t_recon_end - t_recon_start:.3f}s")
-            return result
+            return shortest_path_pair(
+                G=G,
+                source=source,
+                target=target,
+                weight=weight,
+                method=method
+            )
         else:
-            # return shortest_path(convert_from_nx(G, weight=weight), source=source, target=target, weight=weight, method=method)
-            # if dispatcher called this function, we will always get an NxCppGraph
-            # if we reach here, that means the user directly called the nx_cpp.backend.function with a NetworkX graph, so we use the Python backend
-            return nx.shortest_path(G, source=source, target=target, weight=weight, method=method)
+            return nx.shortest_path(
+                G,
+                source=source,
+                target=target,
+                weight=weight,
+                method=method
+            )
     except Exception:
         G = convert_to_nx(G)
-        return nx.shortest_path(G, source=source, target=target, weight=weight, method=method)
-
+        return nx.shortest_path(
+            G,
+            source=source,
+            target=target,
+            weight=weight,
+            method=method
+        )
 
 def betweenness_centrality(
     G,
@@ -403,7 +422,7 @@ def betweenness_centrality(
     Uses Brandes' algorithm for unweighted graphs
     Only normalized and endpoints=False are used; other kwargs being used leads to Python fallback
     """
-    if k is not None or weight is not None or endpoints or seed is not None:
+    if k is not None or weight is not None or endpoints:
         G = convert_to_nx(G)
         return nx.betweenness_centrality(
             G,
@@ -465,7 +484,7 @@ def connected_components(G, method="union-find", **kwargs):
         return connected_components(convert_from_nx(G), method=method, **kwargs)
     except Exception:
         G = convert_to_nx(G)
-        return nx.connected_components(G, method=method)
+        return nx.connected_components(G)
 
 
 def connected_components_union_find(G, **kwargs):
@@ -480,9 +499,9 @@ def minimum_spanning_tree(G, weight="weight", algorithm="kruskal", ignore_nan=Fa
     """
     Backend implementation for nx.minimum_spanning_tree
     Uses Kruskal's or Prim's algorithm
-    If ignore_nan is True, falls back to Python NetworkX
+    If ignore_nan is True or algorithm is Boruvka, falls back to Python NetworkX
     """
-    if ignore_nan:
+    if ignore_nan or (algorithm != "kruskal" and algorithm != "prim"):
         G = convert_to_nx(G)
         return nx.minimum_spanning_tree(G, weight=weight, algorithm=algorithm, ignore_nan=ignore_nan)
     try:
@@ -513,16 +532,16 @@ def minimum_spanning_tree(G, weight="weight", algorithm="kruskal", ignore_nan=Fa
         G = convert_to_nx(G)
         return nx.minimum_spanning_tree(G, weight=weight, algorithm=algorithm, ignore_nan=ignore_nan)
 
-def is_isomorphic(G1, G2, **kwargs):
+def is_isomorphic(G1, G2, node_match=None, edge_match=None, **kwargs):
     """
     Backend implementation for nx.is_isomorphic
     Exact graph isomorphism test using a backtracking search with heuristics
-    If any kwargs are used, falls back to Python NetworkX
+    If any match functions are used, falls back to Python NetworkX
     """
-    if kwargs:
+    if node_match is not None or edge_match is not None:
         G1 = convert_to_nx(G1)
         G2 = convert_to_nx(G2)
-        return nx.is_isomorphic(G1, G2, **kwargs)
+        return nx.is_isomorphic(G1, G2, node_match=node_match, edge_match=edge_match)
     try:
         H1 = G1 if isinstance(G1, NxCppGraph) else convert_from_nx(G1)
         H2 = G2 if isinstance(G2, NxCppGraph) else convert_from_nx(G2)
@@ -532,7 +551,7 @@ def is_isomorphic(G1, G2, **kwargs):
     except Exception:
         G1 = convert_to_nx(G1)
         G2 = convert_to_nx(G2)
-        return nx.is_isomorphic(G1, G2, **kwargs)
+        return nx.is_isomorphic(G1, G2, node_match=node_match, edge_match=edge_match)
 
 
 backend = sys.modules[__name__]
