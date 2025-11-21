@@ -1,7 +1,10 @@
 .DS_Store
 /.vscode
 
-.venv/*
+.venv/
+.pytest_cache/
+__pycache__/
+tests/*.gr
 
 nx_cpp.egg-info/*
 

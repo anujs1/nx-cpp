@@ -15,6 +15,7 @@
 
 namespace py = pybind11;
 
+// overarching graph struct
 struct Graph {
   int n;
   std::vector<std::vector<int>> out_adj;
@@ -158,6 +159,7 @@ GraphView build_graph_view(const Graph &G) {
   return view;
 }
 
+// Unoptimized C++ pagerank implementation
 std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
                              double tol) {
   const int n = G.n;
@@ -165,14 +167,20 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
     return {};
   std::vector<double> pr(n, 1.0 / n);
   std::vector<double> next(n, 0.0);
-  std::vector<int> outdeg(n, 0);
-  for (int u = 0; u < n; ++u)
-    outdeg[u] = static_cast<int>(G.out_adj[u].size());
+  std::vector<double> out_weight(n, 0.0);
+
+  for (int u = 0; u < n; ++u) {
+    double s = 0.0;
+    const auto &wvec = G.weights[u];
+    for (double w : wvec)
+      s += w;
+    out_weight[u] = s;
+  }
 
   for (int it = 0; it < max_iter; ++it) {
     double dangling_sum = 0.0;
     for (int u = 0; u < n; ++u)
-      if (outdeg[u] == 0)
+      if (out_weight[u] == 0.0)
         dangling_sum += pr[u];
 
     const double base = (1.0 - alpha) / n;
@@ -181,11 +189,17 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
       next[i] = base + dang;
 
     for (int u = 0; u < n; ++u) {
-      if (outdeg[u] == 0)
+      if (out_weight[u] == 0.0)
         continue;
-      const double share = alpha * pr[u] / outdeg[u];
-      for (int v : G.out_adj[u])
-        next[v] += share;
+      const double share = alpha * pr[u] / out_weight[u];
+      const auto &nbrs = G.out_adj[u];
+      const auto &wvec = G.weights[u];
+      const std::size_t deg = nbrs.size();
+      for (std::size_t idx = 0; idx < deg; ++idx) {
+        int v = nbrs[idx];
+        double w = wvec[idx];
+        next[v] += share * w;
+      }
     }
 
     double diff = 0.0;
@@ -206,60 +220,71 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
   return pr;
 }
 
-std::vector<int> bfs_edges(const Graph &G, int source) {
+// Unoptimized C++ bfs_edges implementation
+std::vector<std::pair<int, int>> bfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
     return {};
-  
-  std::vector<int> parent(n, -1);
+
+  std::vector<std::pair<int, int>> edges;
   std::vector<bool> visited(n, false);
   std::queue<int> q;
-  
+
   visited[source] = true;
   q.push(source);
-  
+
   while (!q.empty()) {
     int u = q.front();
     q.pop();
-    
+
     for (int v : G.out_adj[u]) {
       if (!visited[v]) {
         visited[v] = true;
-        parent[v] = u;
         q.push(v);
+        edges.emplace_back(u, v);
       }
     }
   }
-  
-  return parent;
+
+  return edges;
 }
 
-std::vector<int> dfs_edges(const Graph &G, int source) {
+// Unoptimized C++ dfs_edges implementation
+std::vector<std::pair<int, int>> dfs_edges(const Graph &G, int source) {
   const int n = G.n;
   if (source < 0 || source >= n)
     return {};
   
-  std::vector<int> parent(n, -1);
+  std::vector<std::pair<int, int>> edges;
   std::vector<bool> visited(n, false);
-  std::stack<int> s;
+  std::vector<std::pair<int, std::size_t>> stack;
   
   visited[source] = true;
-  s.push(source);
+  stack.emplace_back(source, 0);
   
-  while (!s.empty()) {
-    int u = s.top();
-    s.pop();
+  while (!stack.empty()) {
+    int u = stack.back().first;
+    std::size_t &idx = stack.back().second;
+    const auto &nbrs = G.out_adj[u];
+    while (idx < nbrs.size() && visited[nbrs[idx]]) {
+      idx++;
+    }
+    if (idx >= nbrs.size()) {
+      // no more children -> backtrack
+      stack.pop_back();
+      continue;
+    }
+    int v = nbrs[idx];
+    idx++; // next time we come back to u, resume from following neighbor
     
-    for (int v : G.out_adj[u]) {
-      if (!visited[v]) {
-        visited[v] = true;
-        parent[v] = u;
-        s.push(v);
-      }
+    if (!visited[v]) {
+      visited[v] = true;
+      edges.emplace_back(u, v);
+      stack.emplace_back(v, 0);
     }
   }
   
-  return parent;
+  return edges;
 }
 
 std::vector<int> connected_components_union_find(const Graph &G) {
@@ -287,6 +312,7 @@ std::vector<int> connected_components_union_find(const Graph &G) {
   return components;
 }
 
+// Unoptimized C++ connected_components implementation using bfs
 std::vector<int> connected_components_bfs(const Graph &G) {
   require_undirected(G, "connected_components_bfs");
   const int n = G.n;
@@ -313,6 +339,7 @@ std::vector<int> connected_components_bfs(const Graph &G) {
   return components;
 }
 
+// Unoptimized C++ minimum_spanning_tree implementation using Kruskal's algorithm
 std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
   auto edges = collect_undirected_edges(G);
@@ -336,6 +363,7 @@ std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
   return tree;
 }
 
+// Unoptimized C++ minimum_spanning_tree implementation using Prim's algorithm
 std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
   const int n = G.n;
@@ -439,6 +467,7 @@ bool iso_backtrack(int idx, const std::vector<int> &order,
   return false;
 }
 
+// Unoptimized C++ is_isomorphic implementation
 bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   if (G1.n != G2.n)
     return false;
@@ -475,7 +504,7 @@ bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   return iso_backtrack(0, order, mapping, used, view1, view2);
 }
 
-// Dijkstra's algorithm for shortest paths
+// C++ shortest_path implementation using Dijkstra's algorithm
 std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -516,7 +545,7 @@ std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int so
   return {dist, parent};
 }
 
-// Bellman-Ford algorithm for shortest paths (handles negative weights)
+// C++ shortest_path implementation using Bellman-Ford algorithm
 std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -555,7 +584,40 @@ std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, in
   return {dist, parent};
 }
 
-// Betweenness centrality using Brandes' algorithm
+// C++ shortest_path implementation for unweighted graphs (BFS)
+std::pair<std::vector<double>, std::vector<int>> unweighted_shortest_path(const Graph &G, int source) {
+  const int n = G.n;
+  const double INF = std::numeric_limits<double>::infinity();
+
+  std::vector<double> dist(n, INF);
+  std::vector<int> parent(n, -1);
+
+  if (source < 0 || source >= n)
+    return {dist, parent};
+
+  std::queue<int> q;
+  dist[source] = 0.0;
+  q.push(source);
+
+  while (!q.empty()) {
+    int u = q.front();
+    q.pop();
+
+    // all edges have weight 1
+    for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
+      int v = G.out_adj[u][i];
+      if (dist[v] == INF) {
+        dist[v] = dist[u] + 1.0;
+        parent[v] = u;
+        q.push(v);
+      }
+    }
+  }
+
+  return {dist, parent};
+}
+
+// C++ betwenness_centrality implementation using Brandes' algorithm
 std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
   const int n = G.n;
   std::vector<double> bc(n, 0.0);
@@ -625,12 +687,6 @@ std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool
       bc[i] /= 2.0;
   }
   
-  // Handle endpoints
-  if (endpoints) {
-    // The standard Brandes algorithm doesn't count endpoints
-    // If endpoints=True, we add them back (not implemented in this basic version)
-  }
-  
   return bc;
 }
 
@@ -651,10 +707,10 @@ PYBIND11_MODULE(_nx_cpp, m) {
         "Minimal unweighted PageRank implementation.");
   
   m.def("bfs_edges", &bfs_edges, py::arg("graph"), py::arg("source"),
-        "BFS traversal returning parent array for edge reconstruction.");
+        "BFS edge traversal");
   
   m.def("dfs_edges", &dfs_edges, py::arg("graph"), py::arg("source"),
-        "DFS traversal returning parent array for edge reconstruction.");
+        "DFS edge traversal");
   
   m.def("dijkstra", &dijkstra, py::arg("graph"), py::arg("source"),
         "Dijkstra's algorithm returning distances and parent array.");
@@ -662,6 +718,9 @@ PYBIND11_MODULE(_nx_cpp, m) {
   m.def("bellman_ford", &bellman_ford, py::arg("graph"), py::arg("source"),
         "Bellman-Ford algorithm returning distances and parent array.");
   
+  m.def("unweighted_shortest_path", &unweighted_shortest_path, py::arg("graph"), py::arg("source"),
+        "Unweighted shortest path using BFS");
+
   m.def("betweenness_centrality", &betweenness_centrality, 
         py::arg("graph"), py::arg("normalized") = true, py::arg("endpoints") = false,
         "Betweenness centrality using Brandes' algorithm.");
