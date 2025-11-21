@@ -103,213 +103,170 @@ def test_mst_unknown_algorithm_falls_back():
     compare_mst(T_py, T_cpp, msg_prefix="fallback_boruvka:")
 
 
-# NYC ROAD TESTS (KRUSKAL & PRIM, CORRECTNESS & SPEEDUP)
+# PERFORMANCE TESTS ON RANDOM UNDIRECTED GRAPHS
 
-# @pytest.mark.nyc
-# @pytest.mark.performance
-# def test_mst_nyc_kruskal_correctness_and_speedup(nyc_graph):
-#     G = nyc_graph
-
-#     t0 = time.perf_counter()
-#     T_py = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal")
-#     t_py = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     T_cpp = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
-
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
-
-#     compare_mst(T_py, T_cpp, msg_prefix="NYC_kruskal:")
-
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
-
-#     print("")
-#     print(
-#         f"[NYC MST (kruskal)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
-
-#     assert speedup > 1.0
+def make_weighted_gnp(n, p, rng_seed, weight_key="weight"):
+    G = nx.gnp_random_graph(n, p, seed=rng_seed)
+    for idx, (u, v) in enumerate(G.edges()):
+        G[u][v][weight_key] = float(idx + 1)
+    return G
 
 
-# @pytest.mark.nyc
-# @pytest.mark.performance
-# def test_mst_nyc_prim_correctness_and_speedup(nyc_graph):
-#     G = nyc_graph
+@pytest.mark.performance
+def test_mst_random_medium_kruskal_correctness_and_speedup(rng_seed):
+    n = 5000
+    p = 0.002
+    weight_key = "weight"
 
-#     t0 = time.perf_counter()
-#     T_py = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim")
-#     t_py = time.perf_counter() - t0
+    G = make_weighted_gnp(n, p, rng_seed, weight_key=weight_key)
 
-#     t0 = time.perf_counter()
-#     T_cpp = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    T_py = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal")
+    t_py = time.perf_counter() - t0
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    T_cpp = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal", backend="cpp")
+    t_cpp = time.perf_counter() - t0
 
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal", backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
 
-#     compare_mst(T_py, T_cpp, msg_prefix="NYC_prim:")
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
 
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+    compare_mst(T_py, T_cpp, msg_prefix="random_medium_kruskal:")
 
-#     print("")
-#     print(
-#         f"[NYC MST (prim)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
 
-#     assert speedup > 1.0
+    print("")
+    print(
+        f"[Random medium MST (kruskal)]\n"
+        f"n={n}, p={p}\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
 
-
-# # USA-NE (MEDIUM) — PERFORMANCE ONLY
-
-# @pytest.mark.usa_ne
-# @pytest.mark.performance
-# def test_mst_usa_ne_kruskal_speedup(usa_ne_graph):
-#     G = usa_ne_graph
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal")
-#     t_py = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
-
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
-
-#     print("")
-#     print(
-#         f"[USA North-East MST (kruskal)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
-
-#     assert speedup > 1.0
+    assert speedup > 1.0
 
 
-# @pytest.mark.usa_ne
-# @pytest.mark.performance
-# def test_mst_usa_ne_prim_speedup(usa_ne_graph):
-#     G = usa_ne_graph
+@pytest.mark.performance
+def test_mst_random_medium_prim_correctness_and_speedup(rng_seed):
+    n = 5000
+    p = 0.002
+    weight_key = "weight"
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim")
-#     t_py = time.perf_counter() - t0
+    G = make_weighted_gnp(n, p, rng_seed, weight_key=weight_key)
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    T_py = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="prim")
+    t_py = time.perf_counter() - t0
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    T_cpp = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="prim", backend="cpp")
+    t_cpp = time.perf_counter() - t0
 
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="prim", backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
 
-#     print("")
-#     print(
-#         f"[USA North-East MST (prim)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
 
-#     assert speedup > 1.0
+    compare_mst(T_py, T_cpp, msg_prefix="random_medium_prim:")
 
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
 
-# # USA-E (LARGE) — PERFORMANCE ONLY
+    print("")
+    print(
+        f"[Random medium MST (prim)]\n"
+        f"n={n}, p={p}\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
 
-# @pytest.mark.usa_e
-# @pytest.mark.performance
-# @pytest.mark.slow
-# def test_mst_usa_e_kruskal_speedup(usa_e_graph):
-#     G = usa_e_graph
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal")
-#     t_py = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
-
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
-
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
-
-#     print("")
-#     print(
-#         f"[USA East MST (kruskal)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
-
-#     assert speedup > 1.0
+    assert speedup > 1.0
 
 
-# @pytest.mark.usa_e
-# @pytest.mark.performance
-# @pytest.mark.slow
-# def test_mst_usa_e_prim_speedup(usa_e_graph):
-#     G = usa_e_graph
+@pytest.mark.performance
+@pytest.mark.slow
+def test_mst_random_large_kruskal_speedup(rng_seed):
+    n = 20000
+    p = 0.0005
+    weight_key = "weight"
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim")
-#     t_py = time.perf_counter() - t0
+    G = make_weighted_gnp(n, p, rng_seed, weight_key=weight_key)
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal")
+    t_py = time.perf_counter() - t0
 
-#     t0 = time.perf_counter()
-#     _ = nx.minimum_spanning_tree(G, weight="weight", algorithm="prim", backend="cpp")
-#     t_cpp_cache = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal", backend="cpp")
+    t_cpp = time.perf_counter() - t0
 
-#     conversion_overhead_estimate = t_cpp - t_cpp_cache
-#     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="kruskal", backend="cpp")
+    t_cpp_cache = time.perf_counter() - t0
 
-#     print("")
-#     print(
-#         f"[USA East MST (prim)]\n"
-#         f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
-#         f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
-#         f"est. algo time={t_cpp_cache:.3f}s\n"
-#         f"total speedup={speedup:.2f}x\n"
-#         f"algo speedup={(t_py / t_cpp_cache):.2f}x"
-#     )
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
 
-#     assert speedup > 1.0
+    print("")
+    print(
+        f"[Random large MST (kruskal)]\n"
+        f"n={n}, p={p}\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
+
+    assert speedup > 1.0
+
+
+@pytest.mark.performance
+@pytest.mark.slow
+def test_mst_random_large_prim_speedup(rng_seed):
+    n = 20000
+    p = 0.0005
+    weight_key = "weight"
+
+    G = make_weighted_gnp(n, p, rng_seed, weight_key=weight_key)
+
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(G, weight=weight_key, algorithm="prim")
+    t_py = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(
+        G, weight=weight_key, algorithm="prim", backend="cpp"
+    )
+    t_cpp = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    _ = nx.minimum_spanning_tree(
+        G, weight=weight_key, algorithm="prim", backend="cpp"
+    )
+    t_cpp_cache = time.perf_counter() - t0
+
+    conversion_overhead_estimate = t_cpp - t_cpp_cache
+    speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
+
+    print("")
+    print(
+        f"[Random large MST (prim)]\n"
+        f"n={n}, p={p}\n"
+        f"python={t_py:.3f}s cpp={t_cpp:.3f}s\n"
+        f"est. cpp graph conversion time={conversion_overhead_estimate:.3f}s\n"
+        f"est. algo time={t_cpp_cache:.3f}s\n"
+        f"total speedup={speedup:.2f}x\n"
+        f"algo speedup={(t_py / t_cpp_cache):.2f}x"
+    )
+
+    assert speedup > 1.0
