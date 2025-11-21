@@ -9,6 +9,7 @@ if system == "Linux":
     compile_args += ["-fopenmp"]
     link_args += ["-fopenmp"]
 elif system == "Darwin":
+    # Requires 'brew install libomp' present on the system
     compile_args += ["-Xpreprocessor", "-fopenmp"]
     link_args += ["-lomp"]
 
