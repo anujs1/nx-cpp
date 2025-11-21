@@ -1,11 +1,24 @@
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
+import platform
+
+compile_args = ["-O3", "-march=native", "-funroll-loops"]
+link_args = []
+system = platform.system()
+if system == "Linux":
+    compile_args += ["-fopenmp"]
+    link_args += ["-fopenmp"]
+elif system == "Darwin":
+    compile_args += ["-Xpreprocessor", "-fopenmp"]
+    link_args += ["-lomp"]
 
 ext_modules = [
     Pybind11Extension(
         "nx_cpp._nx_cpp",
         ["nx_cpp/_core.cpp"],
         cxx_std=17,
+        extra_compile_args=compile_args,
+        extra_link_args=link_args,
     ),
 ]
 
