@@ -126,7 +126,7 @@ def test_betweenness_rome_correctness_and_speedup(rome_graph):
 
     conversion_overhead_estimate = t_cpp - t_cpp_cache
 
-    compare_betweenness(bc_py, bc_cpp, msg_prefix="NYC:")
+    compare_betweenness(bc_py, bc_cpp, msg_prefix="Rome:")
 
     speedup = t_py / t_cpp if t_cpp > 0 else float("inf")
 

@@ -394,283 +394,173 @@ inline bool bitset_test(const std::vector<uint64_t> &data, int words, int u,
   return (data[idx] & mask) != 0;
 }
 
-// Unoptimized C++ pagerank implementation
-// std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
-//                              double tol) {
-//   const int n = G.n;
-//   if (n == 0)
-//     return {};
-//   std::vector<double> pr(n, 1.0 / n);
-//   std::vector<double> next(n, 0.0);
-//   std::vector<double> out_weight(n, 0.0);
-
-//   for (int u = 0; u < n; ++u) {
-//     double s = 0.0;
-//     const auto &wvec = G.weights[u];
-//     for (double w : wvec)
-//       s += w;
-//     out_weight[u] = s;
-//   }
-
-//   for (int it = 0; it < max_iter; ++it) {
-//     double dangling_sum = 0.0;
-//     for (int u = 0; u < n; ++u)
-//       if (out_weight[u] == 0.0)
-//         dangling_sum += pr[u];
-
-//     const double base = (1.0 - alpha) / n;
-//     const double dang = alpha * dangling_sum / n;
-//     for (int i = 0; i < n; ++i)
-//       next[i] = base + dang;
-
-//     for (int u = 0; u < n; ++u) {
-//       if (out_weight[u] == 0.0)
-//         continue;
-//       const double share = alpha * pr[u] / out_weight[u];
-//       const auto &nbrs = G.out_adj[u];
-//       const auto &wvec = G.weights[u];
-//       const std::size_t deg = nbrs.size();
-//       for (std::size_t idx = 0; idx < deg; ++idx) {
-//         int v = nbrs[idx];
-//         double w = wvec[idx];
-//         next[v] += share * w;
-//       }
-//     }
-
-//     double diff = 0.0;
-//     for (int i = 0; i < n; ++i)
-//       diff += std::abs(next[i] - pr[i]);
-
-//     // normalizing pr to ensure sum stays at 1
-//     double s = std::accumulate(next.begin(), next.end(), 0.0);
-//     if (s > 0)
-//       for (double &x : next)
-//         x /= s;
-//     pr.swap(next);
-
-//     // adding a normalization to diff to avoid exiting too early
-//     if (diff / n < tol)
-//       break;
-//   }
-//   return pr;
-// }
-
 // Optimized C++ pagerank implementation
-std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
-                             double tol) {
+std::vector<double> pagerank(const Graph &G, double alpha, int max_iter, double tol) {
   const int n = G.n;
-  if (n == 0)
-    return {};
+  if (n == 0) return {};
 
-  const auto& row_ptr = G.csr_row_ptr;
-  const auto& col_idx = G.csr_col_idx;
-  
+  std::vector<int> indeg(n, 0);
+  size_t m = 0;
+  for (int u = 0; u < n; ++u) {
+    const auto &nbrs = G.out_adj[u];
+    indeg[u] += 0;
+    m += nbrs.size();
+    for (int v : nbrs) indeg[v]++;
+  }
   std::vector<int> in_row_ptr(n + 1, 0);
-  std::vector<int> in_col_idx;
-  
-  for (int v : col_idx) {
-    in_row_ptr[v + 1]++;
-  }
-  
-  for (int i = 1; i <= n; ++i) {
-    in_row_ptr[i] += in_row_ptr[i - 1];
-  }
-  
-  in_col_idx.resize(col_idx.size());
-  std::vector<int> temp_ptr = in_row_ptr;
+  for (int v = 1; v <= n; ++v)
+    in_row_ptr[v] = in_row_ptr[v - 1] + indeg[v - 1];
+  std::vector<int> in_col_idx(m);
+  std::vector<double> in_w(m);
+
+  std::vector<double> out_wsum(n, 0.0);
   for (int u = 0; u < n; ++u) {
-    for (int j = row_ptr[u]; j < row_ptr[u + 1]; ++j) {
-      int v = col_idx[j];
-      in_col_idx[temp_ptr[v]++] = u;
+    const auto &wts = G.weights[u];
+    double s = 0.0;
+    for (double w : wts) s += w;
+    out_wsum[u] = s;
+  }
+  std::vector<int> fill_ptr = in_row_ptr;
+  for (int u = 0; u < n; ++u) {
+    const auto &nbrs = G.out_adj[u];
+    const auto &wts  = G.weights[u];
+    const size_t deg = nbrs.size();
+    for (size_t k = 0; k < deg; ++k) {
+      const int v = nbrs[k];
+      const int pos = fill_ptr[v]++;
+      in_col_idx[pos] = u;
+      in_w[pos] = wts[k];
     }
   }
-  
-  std::vector<int> outdeg(n);
-  std::vector<double> inv_outdeg(n);
-  for (int u = 0; u < n; ++u) {
-    outdeg[u] = row_ptr[u + 1] - row_ptr[u];
-    inv_outdeg[u] = (outdeg[u] > 0) ? (1.0 / outdeg[u]) : 0.0;
-  }
-  
-  std::vector<double> pr(n, 1.0 / n);
-  std::vector<double> pr_next(n);
-  
-  const double one_minus_alpha = 1.0 - alpha;
-  const double inv_n = 1.0 / n;
-  
+
+  std::vector<double> pr(n, 1.0 / std::max(1, n));
+  std::vector<double> next(n, 0.0);
+
+  const double inv_n = 1.0 / std::max(1, n);
+
   for (int it = 0; it < max_iter; ++it) {
-    std::fill(pr_next.begin(), pr_next.end(), 0.0);
-    
+    // dangling mass
     double dangling_sum = 0.0;
+    #pragma omp parallel for reduction(+:dangling_sum) schedule(static)
     for (int u = 0; u < n; ++u) {
-      if (outdeg[u] == 0) {
-        dangling_sum += pr[u];
-      }
+      if (out_wsum[u] == 0.0) dangling_sum += pr[u];
     }
-    
-    const double base_value = (one_minus_alpha + alpha * dangling_sum) * inv_n;
-    
+
+    // base term
+    const double base_value = (1.0 - alpha) * inv_n + alpha * dangling_sum * inv_n;
+
+    #pragma omp parallel for schedule(static)
+    for (int v = 0; v < n; ++v) next[v] = base_value;
+
     #pragma omp parallel for schedule(static)
     for (int v = 0; v < n; ++v) {
       double sum = 0.0;
-      for (int j = in_row_ptr[v]; j < in_row_ptr[v + 1]; ++j) {
-        int u = in_col_idx[j];
-        sum += pr[u] * inv_outdeg[u];
+      const int start = in_row_ptr[v];
+      const int end   = in_row_ptr[v + 1];
+      for (int p = start; p < end; ++p) {
+        const int u = in_col_idx[p];
+        const double out_sum = out_wsum[u];
+        if (out_sum > 0.0) {
+          sum += pr[u] * (in_w[p] / out_sum);
+        }
       }
-      pr_next[v] = base_value + alpha * sum;
+      next[v] += alpha * sum;
     }
-    
+
     double diff = 0.0;
     #pragma omp parallel for reduction(+:diff) schedule(static)
-    for (int i = 0; i < n; ++i) {
-      diff += std::abs(pr_next[i] - pr[i]);
+    for (int i = 0; i < n; ++i) diff += std::abs(next[i] - pr[i]);
+
+    double s = 0.0;
+    #pragma omp parallel for reduction(+:s) schedule(static)
+    for (int i = 0; i < n; ++i) s += next[i];
+    if (s > 0.0) {
+      #pragma omp parallel for schedule(static)
+      for (int i = 0; i < n; ++i) next[i] /= s;
     }
-    
-    pr.swap(pr_next);
-    
-    if (diff < tol) {
-      break;
-    }
+
+    pr.swap(next);
+
+    if (diff * inv_n < tol) break;
   }
-  
   return pr;
 }
 
-// Unoptimized C++ bfs_edges implementation
-// std::vector<std::pair<int, int>> bfs_edges(const Graph &G, int source) {
-//   const int n = G.n;
-//   if (source < 0 || source >= n)
-//     return {};
-
-//   std::vector<std::pair<int, int>> edges;
-//   std::vector<bool> visited(n, false);
-//   std::queue<int> q;
-
-//   visited[source] = true;
-//   q.push(source);
-
-//   while (!q.empty()) {
-//     int u = q.front();
-//     q.pop();
-
-//     for (int v : G.out_adj[u]) {
-//       if (!visited[v]) {
-//         visited[v] = true;
-//         q.push(v);
-//         edges.emplace_back(u, v);
-//       }
-//     }
-//   }
-
-//   return edges;
-// }
-
 // Optimized C++ bfs_edges implementation
-std::vector<int> bfs_edges(const Graph &G, int source) {
+std::vector<std::pair<int, int>> bfs_edges(const Graph &G, int source) {
   const int n = G.n;
-  if (source < 0 || source >= n)
-    return {};
-  
-  std::vector<int> parent(n, -1);
-  
-  // Use vector as ring buffer - faster than std::queue
-  std::vector<int> queue;
-  queue.reserve(n);  // Pre-allocate to avoid reallocations
-  
-  parent[source] = source;  // Mark source as visited (self-parent)
-  queue.push_back(source);
-  
+  if (source < 0 || source >= n) return {};
+
+  std::vector<std::pair<int, int>> edges;
+  edges.reserve(n ? std::min<size_t>(G.csr_col_idx.size(), static_cast<size_t>(n-1)) : 0);
+
+  std::vector<char> visited(n, 0);
+  std::vector<int> q; q.reserve(n);
   size_t head = 0;
-  while (head < queue.size()) {
-    int u = queue[head++];
-    
-    // Use CSR representation for better cache locality
+
+  visited[source] = 1;
+  q.push_back(source);
+
+  while (head < q.size()) {
+    const int u = q[head++];
+
     const int start = G.csr_row_ptr[u];
-    const int end = G.csr_row_ptr[u + 1];
+    const int end   = G.csr_row_ptr[u + 1];
     for (int i = start; i < end; ++i) {
-      int v = G.csr_col_idx[i];
-      if (parent[v] == -1) {  // Not visited
-        parent[v] = u;
-        queue.push_back(v);
+      const int v = G.csr_col_idx[i];
+      if (!visited[v]) {
+        visited[v] = 1;
+        q.push_back(v);
+        edges.emplace_back(u, v);
       }
     }
   }
-  
-  parent[source] = -1;  // Restore source to -1 for consistency
-  return parent;
+  return edges;
 }
 
-// Unoptimized C++ dfs_edges implementation
-// std::vector<std::pair<int, int>> dfs_edges(const Graph &G, int source) {
-//   const int n = G.n;
-//   if (source < 0 || source >= n)
-//     return {};
-  
-//   std::vector<std::pair<int, int>> edges;
-//   std::vector<bool> visited(n, false);
-//   std::vector<std::pair<int, std::size_t>> stack;
-  
-//   visited[source] = true;
-//   stack.emplace_back(source, 0);
-  
-//   while (!stack.empty()) {
-//     int u = stack.back().first;
-//     std::size_t &idx = stack.back().second;
-//     const auto &nbrs = G.out_adj[u];
-//     while (idx < nbrs.size() && visited[nbrs[idx]]) {
-//       idx++;
-//     }
-//     if (idx >= nbrs.size()) {
-//       // no more children -> backtrack
-//       stack.pop_back();
-//       continue;
-//     }
-//     int v = nbrs[idx];
-//     idx++; // next time we come back to u, resume from following neighbor
-    
-//     if (!visited[v]) {
-//       visited[v] = true;
-//       edges.emplace_back(u, v);
-//       stack.emplace_back(v, 0);
-//     }
-//   }
-  
-//   return edges;
-// }
 
 // Optimized C++ dfs_edges implementation
-std::vector<int> dfs_edges(const Graph &G, int source) {
+std::vector<std::pair<int, int>> dfs_edges(const Graph &G, int source) {
   const int n = G.n;
-  if (source < 0 || source >= n)
-    return {};
-  
-  std::vector<int> parent(n, -1);
-  
-  // Use vector as stack - faster than std::stack
-  std::vector<int> stack;
-  stack.reserve(n);  // Pre-allocate to avoid reallocations
-  
-  parent[source] = source;  // Mark source as visited
-  stack.push_back(source);
-  
-  while (!stack.empty()) {
-    int u = stack.back();
-    stack.pop_back();
-    
-    // Use CSR representation for better cache locality
+  if (source < 0 || source >= n) return {};
+
+  std::vector<std::pair<int, int>> edges;
+  edges.reserve(n ? std::min<size_t>(G.csr_col_idx.size(), static_cast<size_t>(n-1)) : 0);
+
+  std::vector<char> visited(n, 0);
+  std::vector<std::pair<int,int>> st; st.reserve(n);
+
+  visited[source] = 1;
+  st.emplace_back(source, 0);
+
+  while (!st.empty()) {
+    int u, &k = st.back().second;
+    u = st.back().first;
+
     const int start = G.csr_row_ptr[u];
-    const int end = G.csr_row_ptr[u + 1];
-    for (int i = start; i < end; ++i) {
-      int v = G.csr_col_idx[i];
-      if (parent[v] == -1) {  // Not visited
-        parent[v] = u;
-        stack.push_back(v);
-      }
+    const int end   = G.csr_row_ptr[u + 1];
+
+    // advance k to the next unvisited neighbor
+    while (start + k < end && visited[G.csr_col_idx[start + k]]) {
+      ++k;
+    }
+
+    if (start + k >= end) {
+      // no more children from u -> backtrack
+      st.pop_back();
+      continue;
+    }
+
+    const int v = G.csr_col_idx[start + k];
+    k++; // next time we return to u, resume after this neighbor
+
+    if (!visited[v]) {
+      visited[v] = 1;
+      edges.emplace_back(u, v);
+      st.emplace_back(v, 0);
     }
   }
-  
-  parent[source] = -1;  // Restore source to -1 for consistency
-  return parent;
+  return edges;
 }
 
 std::vector<int> connected_components_union_find(const Graph &G) {
@@ -697,33 +587,6 @@ std::vector<int> connected_components_union_find(const Graph &G) {
   }
   return components;
 }
-
-// Unoptimized C++ connected_components implementation using bfs
-// std::vector<int> connected_components_bfs(const Graph &G) {
-//   require_undirected(G, "connected_components_bfs");
-//   const int n = G.n;
-//   std::vector<int> components(n, -1);
-//   int comp_id = 0;
-//   std::queue<int> q;
-//   for (int i = 0; i < n; ++i) {
-//     if (components[i] != -1)
-//       continue;
-//     components[i] = comp_id;
-//     q.push(i);
-//     while (!q.empty()) {
-//       int u = q.front();
-//       q.pop();
-//       for (int v : G.out_adj[u]) {
-//         if (components[v] == -1) {
-//           components[v] = comp_id;
-//           q.push(v);
-//         }
-//       }
-//     }
-//     comp_id++;
-//   }
-//   return components;
-// }
 
 // Optimized C++ connected_components implementation using bfs
 std::vector<int> connected_components_bfs(const Graph &G) {
@@ -783,30 +646,6 @@ std::vector<int> connected_components_bfs(const Graph &G) {
   }
   return components;
 }
-
-// Unoptimized C++ minimum_spanning_tree implementation using Kruskal's algorithm
-// std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
-//   require_undirected(G, "minimum_spanning_tree");
-//   auto edges = collect_undirected_edges(G);
-//   std::sort(edges.begin(), edges.end(),
-//             [](const WeightedEdge &a, const WeightedEdge &b) {
-//               if (a.w != b.w)
-//                 return a.w < b.w;
-//               if (a.u != b.u)
-//                 return a.u < b.u;
-//               return a.v < b.v;
-//             });
-//   DisjointSet dsu(G.n);
-//   std::vector<std::tuple<int, int, double>> tree;
-//   tree.reserve(G.n ? G.n - 1 : 0);
-//   for (const auto &e : edges) {
-//     if (dsu.find(e.u) != dsu.find(e.v)) {
-//       dsu.unite(e.u, e.v);
-//       tree.emplace_back(e.u, e.v, e.w);
-//     }
-//   }
-//   return tree;
-// }
 
 // Optimized C++ minimum_spanning_tree implementation using Kruskal's algorithm
 std::vector<std::tuple<int, int, double>> mst_kruskal(const Graph &G) {
@@ -913,41 +752,6 @@ private:
   }
 };
 
-// Unoptimized C++ minimum_spanning_tree implementation using Prim's algorithm
-// std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
-//   require_undirected(G, "minimum_spanning_tree");
-//   const int n = G.n;
-//   std::vector<std::tuple<int, int, double>> tree;
-//   if (n == 0)
-//     return tree;
-//   std::vector<bool> in_tree(n, false);
-//   using PQItem = std::tuple<double, int, int>; // weight, parent, node
-//   std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
-//   for (int start = 0; start < n; ++start) {
-//     if (in_tree[start])
-//       continue;
-//     pq.emplace(0.0, -1, start);
-//     while (!pq.empty()) {
-//       auto [weight, parent, node] = pq.top();
-//       pq.pop();
-//       if (in_tree[node])
-//         continue;
-//       in_tree[node] = true;
-//       if (parent != -1) {
-//         tree.emplace_back(parent, node, weight);
-//       }
-//       for (size_t i = 0; i < G.out_adj[node].size(); ++i) {
-//         int nb = G.out_adj[node][i];
-//         double w = G.weights[node][i];
-//         if (!in_tree[nb]) {
-//           pq.emplace(w, node, nb);
-//         }
-//       }
-//     }
-//   }
-//   return tree;
-// }
-
 // Optimized C++ minimum_spanning_tree implementation using Prim's algorithm
 std::vector<std::tuple<int, int, double>> mst_prim(const Graph &G) {
   require_undirected(G, "minimum_spanning_tree");
@@ -1042,103 +846,6 @@ bool adjacency_compatible(int u, int v, int depth, const IsoContext &ctx,
   }
   return true;
 }
-
-// bool iso_backtrack(int idx, const std::vector<int> &order,
-//                    std::vector<int> &mapping, std::vector<bool> &used,
-//                    const GraphView &A, const GraphView &B) {
-//   const int n = static_cast<int>(order.size());
-//   if (idx == n)
-//     return true;
-//   int u = order[idx];
-//   for (int v = 0; v < n; ++v) {
-//     if (used[v])
-//       continue;
-//     if (A.out_degree[u] != B.out_degree[v])
-//       continue;
-//     if (A.in_degree[u] != B.in_degree[v])
-//       continue;
-//     bool ok = true;
-//     for (int i = 0; i < n; ++i) {
-//       int mapped = mapping[i];
-//       if (mapped == -1)
-//         continue;
-//       bool out_uw = A.out_adj_sets[u].count(i) > 0;
-//       bool out_vw = B.out_adj_sets[v].count(mapped) > 0;
-//       if (out_uw != out_vw) {
-//         ok = false;
-//         break;
-//       }
-//       if (out_uw) {
-//         double w1 = A.out_weights[u].at(i);
-//         double w2 = B.out_weights[v].at(mapped);
-//         if (std::abs(w1 - w2) > 1e-9) {
-//           ok = false;
-//           break;
-//         }
-//       }
-//       bool in_uw = A.in_adj_sets[u].count(i) > 0;
-//       bool in_vw = B.in_adj_sets[v].count(mapped) > 0;
-//       if (in_uw != in_vw) {
-//         ok = false;
-//         break;
-//       }
-//       if (in_uw) {
-//         double w1 = A.in_weights[u].at(i);
-//         double w2 = B.in_weights[v].at(mapped);
-//         if (std::abs(w1 - w2) > 1e-9) {
-//           ok = false;
-//           break;
-//         }
-//       }
-//     }
-//     if (!ok)
-//       continue;
-//     mapping[u] = v;
-//     used[v] = true;
-//     if (iso_backtrack(idx + 1, order, mapping, used, A, B))
-//       return true;
-//     mapping[u] = -1;
-//     used[v] = false;
-//   }
-//   return false;
-// }
-
-// // Unoptimized C++ is_isomorphic implementation
-// bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
-//   if (G1.n != G2.n)
-//     return false;
-//   if (G1.directed != G2.directed)
-//     return false;
-//   if (G1.weighted != G2.weighted)
-//     return false;
-//   GraphView view1 = build_graph_view(G1);
-//   GraphView view2 = build_graph_view(G2);
-//   auto deg_out1 = view1.out_degree;
-//   auto deg_out2 = view2.out_degree;
-//   std::sort(deg_out1.begin(), deg_out1.end());
-//   std::sort(deg_out2.begin(), deg_out2.end());
-//   if (deg_out1 != deg_out2)
-//     return false;
-//   auto deg_in1 = view1.in_degree;
-//   auto deg_in2 = view2.in_degree;
-//   std::sort(deg_in1.begin(), deg_in1.end());
-//   std::sort(deg_in2.begin(), deg_in2.end());
-//   if (deg_in1 != deg_in2)
-//     return false;
-//   const int n = G1.n;
-//   std::vector<int> order(n);
-//   std::iota(order.begin(), order.end(), 0);
-//   std::sort(order.begin(), order.end(), [&](int a, int b) {
-//     if (view1.out_degree[a] != view1.out_degree[b])
-//       return view1.out_degree[a] > view1.out_degree[b];
-//     if (view1.in_degree[a] != view1.in_degree[b])
-//       return view1.in_degree[a] > view1.in_degree[b];
-//     return a < b;
-//   });
-//   std::vector<int> mapping(n, -1);
-//   std::vector<bool> used(n, false);
-//   return iso_backtrack(0, order, mapping, used, view1, view2);
-// }
 
 bool iso_backtrack(int depth, const IsoContext &ctx,
                    std::vector<int> &mapping,
@@ -1265,47 +972,6 @@ bool graphs_are_isomorphic(const Graph &G1, const Graph &G2) {
   return iso_backtrack(0, ctx, mapping, reverse_map);
 }
 
-// C++ shortest_path implementation using Dijkstra's algorithm
-// std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int source) {
-//   const int n = G.n;
-//   const double INF = std::numeric_limits<double>::infinity();
-  
-//   std::vector<double> dist(n, INF);
-//   std::vector<int> parent(n, -1);
-  
-//   if (source < 0 || source >= n)
-//     return {dist, parent};
-  
-//   // Priority queue: (distance, node)
-//   using pdi = std::pair<double, int>;
-//   std::priority_queue<pdi, std::vector<pdi>, std::greater<pdi>> pq;
-  
-//   dist[source] = 0.0;
-//   pq.push({0.0, source});
-  
-//   while (!pq.empty()) {
-//     auto [d, u] = pq.top();
-//     pq.pop();
-    
-//     if (d > dist[u])
-//       continue;
-    
-//     for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
-//       int v = G.out_adj[u][i];
-//       double w = G.weights[u][i];
-//       double new_dist = dist[u] + w;
-      
-//       if (new_dist < dist[v]) {
-//         dist[v] = new_dist;
-//         parent[v] = u;
-//         pq.push({new_dist, v});
-//       }
-//     }
-//   }
-  
-//   return {dist, parent};
-// }
-
 // Optimized C++ shortest_path implementation using Dijkstra's algorithm
 std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int source) {
   const int n = G.n;
@@ -1351,47 +1017,7 @@ std::pair<std::vector<double>, std::vector<int>> dijkstra(const Graph &G, int so
   return {dist, parent};
 }
 
-// C++ shortest_path implementation using Bellman-Ford algorithm
-// std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, int source) {
-//   const int n = G.n;
-//   const double INF = std::numeric_limits<double>::infinity();
-  
-//   std::vector<double> dist(n, INF);
-//   std::vector<int> parent(n, -1);
-  
-//   if (source < 0 || source >= n)
-//     return {dist, parent};
-  
-//   dist[source] = 0.0;
-  
-//   // Relax edges n-1 times
-//   for (int iter = 0; iter < n - 1; ++iter) {
-//     bool updated = false;
-//     for (int u = 0; u < n; ++u) {
-//       if (dist[u] == INF)
-//         continue;
-      
-//       for (size_t i = 0; i < G.out_adj[u].size(); ++i) {
-//         int v = G.out_adj[u][i];
-//         double w = G.weights[u][i];
-//         double new_dist = dist[u] + w;
-        
-//         if (new_dist < dist[v]) {
-//           dist[v] = new_dist;
-//           parent[v] = u;
-//           updated = true;
-//         }
-//       }
-//     }
-//     if (!updated)
-//       break;
-//   }
-  
-//   return {dist, parent};
-// }
-
-// Optimized Bellman-Ford algorithm using parallel delta-stepping inspired approach
-// Combines SPFA queue-based optimization with parallelization
+// Optimized C++ Bellman-Ford algorithm
 std::pair<std::vector<double>, std::vector<int>> bellman_ford(const Graph &G, int source) {
   const int n = G.n;
   const double INF = std::numeric_limits<double>::infinity();
@@ -1559,79 +1185,6 @@ std::pair<std::vector<double>, std::vector<int>> unweighted_shortest_path(const 
 
   return {dist, parent};
 }
-
-// C++ betwenness_centrality implementation using Brandes' algorithm
-// std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
-//   const int n = G.n;
-//   std::vector<double> bc(n, 0.0);
-  
-//   if (n == 0)
-//     return bc;
-  
-//   // For each source node
-//   for (int s = 0; s < n; ++s) {
-//     std::stack<int> S;
-//     std::vector<std::vector<int>> P(n);  // predecessors
-//     std::vector<int> sigma(n, 0);        // number of shortest paths
-//     std::vector<int> dist(n, -1);        // distance from source
-//     std::vector<double> delta(n, 0.0);   // dependency
-    
-//     sigma[s] = 1;
-//     dist[s] = 0;
-    
-//     // BFS
-//     std::queue<int> Q;
-//     Q.push(s);
-    
-//     while (!Q.empty()) {
-//       int v = Q.front();
-//       Q.pop();
-//       S.push(v);
-      
-//       for (int w : G.out_adj[v]) {
-//         // First time visiting w?
-//         if (dist[w] < 0) {
-//           Q.push(w);
-//           dist[w] = dist[v] + 1;
-//         }
-//         // Shortest path to w via v?
-//         if (dist[w] == dist[v] + 1) {
-//           sigma[w] += sigma[v];
-//           P[w].push_back(v);
-//         }
-//       }
-//     }
-    
-//     // Accumulation phase
-//     while (!S.empty()) {
-//       int w = S.top();
-//       S.pop();
-      
-//       for (int v : P[w]) {
-//         delta[v] += (static_cast<double>(sigma[v]) / sigma[w]) * (1.0 + delta[w]);
-//       }
-      
-//       if (w != s) {
-//         bc[w] += delta[w];
-//       }
-//     }
-//   }
-  
-//   // Normalization / scaling to match NetworkX
-//   if (normalized && n > 2) {
-//     // For undirected graphs, NetworkX normalized value equals
-//     // (unnormalized/2) * (2/((n-1)(n-2))) = unnormalized * (1/((n-1)(n-2)))
-//     double scale = 1.0 / ((n - 1) * (n - 2));
-//     for (int i = 0; i < n; ++i)
-//       bc[i] *= scale;
-//   } else if (!G.directed) {
-//     // Unnormalized undirected values are divided by 2
-//     for (int i = 0; i < n; ++i)
-//       bc[i] /= 2.0;
-//   }
-  
-//   return bc;
-// }
 
 // Optimized Betweenness centrality using Brandes' algorithm (per-source parallelized)
 std::vector<double> betweenness_centrality(const Graph &G, bool normalized, bool endpoints) {
@@ -1836,4 +1389,16 @@ PYBIND11_MODULE(_nx_cpp, m) {
   m.def("graphs_are_isomorphic", &graphs_are_isomorphic, py::arg("graph_a"),
         py::arg("graph_b"),
         "Backtracking-based exact graph isomorphism test.");
+  
+  m.def("omp_test", []() {
+    int n_threads = 0;
+
+    #pragma omp parallel
+    {
+        #pragma omp atomic
+        n_threads++;
+    }
+
+    return n_threads;
+});
 }

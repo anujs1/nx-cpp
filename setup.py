@@ -1,6 +1,7 @@
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 import platform
+import subprocess
 
 compile_args = ["-O3", "-march=native", "-funroll-loops"]
 link_args = []
@@ -10,8 +11,21 @@ if system == "Linux":
     link_args += ["-fopenmp"]
 elif system == "Darwin":
     # Requires 'brew install libomp' present on the system
-    compile_args += ["-Xpreprocessor", "-fopenmp"]
-    link_args += ["-lomp"]
+    libomp_prefix = subprocess.check_output(
+        ["brew", "--prefix", "libomp"], text=True
+    ).strip()
+    compile_args += [
+        "-Xpreprocessor",
+        "-fopenmp",
+        f"-I{libomp_prefix}/include",
+    ]
+    link_args += [
+        f"-L{libomp_prefix}/lib",
+        "-lomp",
+    ]
+    
+    # compile_args += ["-Xpreprocessor", "-fopenmp"]
+    # link_args += ["-lomp"]
 
 ext_modules = [
     Pybind11Extension(
