@@ -167,14 +167,20 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
     return {};
   std::vector<double> pr(n, 1.0 / n);
   std::vector<double> next(n, 0.0);
-  std::vector<int> outdeg(n, 0);
-  for (int u = 0; u < n; ++u)
-    outdeg[u] = static_cast<int>(G.out_adj[u].size());
+  std::vector<double> out_weight(n, 0.0);
+
+  for (int u = 0; u < n; ++u) {
+    double s = 0.0;
+    const auto &wvec = G.weights[u];
+    for (double w : wvec)
+      s += w;
+    out_weight[u] = s;
+  }
 
   for (int it = 0; it < max_iter; ++it) {
     double dangling_sum = 0.0;
     for (int u = 0; u < n; ++u)
-      if (outdeg[u] == 0)
+      if (out_weight[u] == 0.0)
         dangling_sum += pr[u];
 
     const double base = (1.0 - alpha) / n;
@@ -183,11 +189,17 @@ std::vector<double> pagerank(const Graph &G, double alpha, int max_iter,
       next[i] = base + dang;
 
     for (int u = 0; u < n; ++u) {
-      if (outdeg[u] == 0)
+      if (out_weight[u] == 0.0)
         continue;
-      const double share = alpha * pr[u] / outdeg[u];
-      for (int v : G.out_adj[u])
-        next[v] += share;
+      const double share = alpha * pr[u] / out_weight[u];
+      const auto &nbrs = G.out_adj[u];
+      const auto &wvec = G.weights[u];
+      const std::size_t deg = nbrs.size();
+      for (std::size_t idx = 0; idx < deg; ++idx) {
+        int v = nbrs[idx];
+        double w = wvec[idx];
+        next[v] += share * w;
+      }
     }
 
     double diff = 0.0;

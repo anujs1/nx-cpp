@@ -161,16 +161,18 @@ def pagerank(
     max_iter: int = 100,
     tol: float = 1.0e-6,
     nstart=None,
-    weight=None,
+    weight='weight',
     dangling=None,
     *args,
     **kwargs,
 ):
     """
     Backend implementation for nx.pagerank
-    Only alpha, max_iter, tol are used; other kwargs being used leads to Python fallback
+    Only alpha, max_iter, weight, tol are used; other kwargs being used leads to Python fallback
     """
-    if personalization is not None or nstart is not None or weight is not None or dangling is not None:
+    if personalization is not None or nstart is not None or (weight != 'weight' and weight is not None) or dangling is not None:
+        print("failed 1")
+        print(personalization, nstart, weight, dangling)
         G = convert_to_nx(G)
         return nx.pagerank(
             G,

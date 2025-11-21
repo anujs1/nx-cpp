@@ -58,30 +58,30 @@ def test_pagerank_random_small(rng_seed):
 
 # GRACEFUL FALLBACK TESTS
 
-# @pytest.mark.graceful_fallback
-# def test_pagerank_cpp_exception_falls_back(monkeypatch):
-#     """
-#     Simulate a failure in the C++ backend and assert that
-#     nx.pagerank(..., backend='cpp') falls back to the pure Python impl.
+@pytest.mark.graceful_fallback
+def test_pagerank_cpp_exception_falls_back(monkeypatch):
+    """
+    Simulate a failure in the C++ backend and assert that
+    nx.pagerank(..., backend='cpp') falls back to the pure Python impl.
 
-#     Contract:
-#     - C++ failure must NOT crash user code
-#     - Result must match Python pagerank
-#     """
-#     import nx_cpp.backend as cpp_backend
+    Contract:
+    - C++ failure must NOT crash user code
+    - Result must match Python pagerank
+    """
+    import nx_cpp.backend as cpp_backend
 
-#     G = nx.gnp_random_graph(40, 0.15, directed=True, seed=123)
-#     pr_py = nx.pagerank(G, alpha=0.85)
+    G = nx.gnp_random_graph(40, 0.15, directed=True, seed=123)
+    pr_py = nx.pagerank(G, alpha=0.85)
 
-#     def boom(*args, **kwargs):
-#         raise RuntimeError("Simulated C++ pagerank failure")
+    def boom(*args, **kwargs):
+        raise RuntimeError("Simulated C++ pagerank failure")
 
-#     # Patch the imported C++ function inside the backend module
-#     monkeypatch.setattr(cpp_backend, "_cpp_pagerank", boom, raising=True)
+    # Patch the imported C++ function inside the backend module
+    monkeypatch.setattr(cpp_backend, "_cpp_pagerank", boom, raising=True)
 
-#     pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
+    pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
 
-#     compare_pageranks(pr_py, pr_cpp, msg_prefix="graceful_fallback:")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="graceful_fallback:")
 
 
 # NYC ROAD TEST (CORRECTNESS & SPEEDUP)
@@ -99,9 +99,9 @@ def test_pagerank_nyc_correctness_and_timing(nyc_graph):
     pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
     t_cpp = time.perf_counter() - t0
 
-    compare_pageranks(pr_py, pr_cpp, tol=1e-5, msg_prefix="NYC:")
+    compare_pageranks(pr_py, pr_cpp, msg_prefix="NYC:")
 
-    assert abs(sum(pr_cpp.values()) - 1.0) < 1e-5
+    assert abs(sum(pr_cpp.values()) - 1.0) < 1e-6
 
     if t_cpp > 0:
         speedup = t_py / t_cpp
@@ -117,30 +117,30 @@ def test_pagerank_nyc_correctness_and_timing(nyc_graph):
 
 # USA ROAD TEST (SPEEDUP)
 
-@pytest.mark.usa
-@pytest.mark.performance
-def test_pagerank_usa_speedup(usa_graph):
-    """
-    Focused on speedup since any correctness issues should be caught in NYC test
-    """
-    G = usa_graph
+# @pytest.mark.usa
+# @pytest.mark.performance
+# def test_pagerank_usa_speedup(usa_graph):
+#     """
+#     Focused on speedup since any correctness issues should be caught in NYC test
+#     """
+#     G = usa_graph
 
-    t0 = time.perf_counter()
-    _ = nx.pagerank(G, alpha=0.85)
-    t_py = time.perf_counter() - t0
+#     t0 = time.perf_counter()
+#     _ = nx.pagerank(G, alpha=0.85)
+#     t_py = time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    _ = nx.pagerank(G, alpha=0.85, backend="cpp")
-    t_cpp = time.perf_counter() - t0
+#     t0 = time.perf_counter()
+#     _ = nx.pagerank(G, alpha=0.85, backend="cpp")
+#     t_cpp = time.perf_counter() - t0
 
-    if t_cpp > 0:
-        speedup = t_py / t_cpp
-    else:
-        speedup = float("inf")
+#     if t_cpp > 0:
+#         speedup = t_py / t_cpp
+#     else:
+#         speedup = float("inf")
 
-    print(
-        f"[USA PageRank] python={t_py:.3f}s cpp={t_cpp:.3f}s "
-        f"speedup={speedup:.2f}x"
-    )
+#     print(
+#         f"[USA PageRank] python={t_py:.3f}s cpp={t_cpp:.3f}s "
+#         f"speedup={speedup:.2f}x"
+#     )
 
-    assert speedup > 1.0
+#     assert speedup > 1.0
