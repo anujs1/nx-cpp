@@ -50,14 +50,14 @@ Always invoke algorithms through the official NetworkX API; bypassing it can cau
 ## Functionality
 
 Functions supported:
-- `pagerank`
-- `bfs_edges`
-- `dfs_edges`
-- `shortest_path`
-- `betweenness_centrality`
-- `connected_components`
-- `minimum_spanning_tree`
-- `is_isomorphic`
+- `pagerank(G, alpha, max_iter, weight, tol)`
+- `bfs_edges(G, source)`
+- `dfs_edges(G, source)`
+- `shortest_path(G, source, target, weight, method)`
+- `betweenness_centrality(G)`
+- `connected_components(G, method)`
+- `minimum_spanning_tree(G, weight, algorithm)`
+- `is_isomorphic(G1, G2)`
 
 ## Limitations
 
