@@ -1,14 +1,29 @@
 # nx-cpp
 
-A tiny NetworkX backend that implements `pagerank` in C++ via pybind11.
+A NetworkX backend that implements common functions in C++ via pybind11.
 
 ## Install
 
+With Python venv:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e .
+```
+
+With Conda:
+```bash
+conda create -n nx-cpp pip
+conda activate nx-cpp
+pip install -e .
+```
+
+You may need to install `libomp` before building the project. On Apple Silicon with Homebrew, this can be achieved with:
+```bash
+brew install libomp
+export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
 ```
 
 ## Try it
