@@ -45,46 +45,48 @@ pr_cpp = nx.pagerank(G, alpha=0.85, backend="cpp")
 
 ## Important Notice
 
-Use official NetworkX API function calls, or else the C++ backend will run on a stale cache
+Always invoke algorithms through the official NetworkX API; bypassing it can cause the C++ backend to operate on outdated cached data.
 
 ## Functionality
 
-`pagerank`
-`bfs_edges`
-`dfs_edges`
-`shortest_path`
-`betweenness_centrality`
-`connected_components`
-`minimum_spanning_tree`
-`is_isomorphic`
+Functions supported:
+- `pagerank`
+- `bfs_edges`
+- `dfs_edges`
+- `shortest_path`
+- `betweenness_centrality`
+- `connected_components`
+- `minimum_spanning_tree`
+- `is_isomorphic`
 
 ## Limitations
 
-Multigraphs are not supported
+Multigraphs are not supported.
 
 ## Best Uses
 
-Works well on most graph types, true impact of speedup is most noticeable on large graphs
+Most effective on medium to large graphs, where algorithmic speedups outweigh dispatch and conversion overhead.
 
-Conversion cost and overhead can sometimes make C++ backend slower than Python on small graphs doing inexpensive computations
+Conversion cost overhead can sometimes make C++ backend slower than Python on small graphs doing lightweight computations.
 
 ## Repository Structure
 
-`nx_cpp`
-- contains all of the actual code for the backend, including C++ definitions, python bindings, and backend handling
+`nx_cpp/`: source code for the backend, including C++ definitions, python bindings, and backend dispatching.
 
-`examples`
-- contains short, lightweight demos for each of the implemented algorithms that highlight uses, speedup, and accuracy
+`examples/`: short, lightweight demos for each of the implemented algorithms that highlight uses, speedup, and accuracy
 
-`tests`
-- comprehensive test suite that tests each function in isolation on small unit tests to large graph tests. also contains valgrind test and a real-world test that tests functions on programs simulating more "real-world" behavior and using functions together
+`tests/`: comprehensive test suite covering unit tests, large-graph evaluations, memory checks, and end-to-end scenarios emulating real-world usage.
 
 ## How to Test
 
-From the root, can run `python -m pytest -vv -s`
-Recommend the `-vv` and `-s` flags as they will print out actual runtimes and speedups for individual stress tests
-`pytest.ini` contains a list of all the marks – specific tests can be run in isolation or avoided completely based on whatever you'd like to test
+In the project root, run:
+```bash
+python -m pytest -vv -s
+```
+`-vv` and `s` will print out the actual runtimes and speedups for individual stress tests.
+
+`pytest.ini` contains a list of all the markers. Subsets of tests can be run in isolation.
 
 ## Hardware Requirements
 
-M1 Mac and Linux VM have both been tested with this program and should run cleanly.
+Apple Silicon and Linux (school VM) both support the execution of this program.
