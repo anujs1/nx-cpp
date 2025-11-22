@@ -45,4 +45,5 @@ def main():
 
 
 if __name__ == "__main__":
+    nx.config.warnings_to_ignore.add("cache")
     main()
