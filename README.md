@@ -4,10 +4,18 @@ A NetworkX backend that implements common functions in C++ via pybind11.
 
 ## Install
 
+With Python venv:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
+pip install -e .
+```
+
+With Conda:
+```bash
+conda create -n nx-cpp pip
+conda activate nx-cpp
 pip install -e .
 ```
 
